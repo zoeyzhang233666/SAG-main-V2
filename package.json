@@ -1,0 +1,9 @@
+{
+  "name": "chemclaw-workspace",
+  "private": true,
+  "scripts": {
+    "db:backup": "powershell -ExecutionPolicy Bypass -File scripts/backup-data.ps1",
+    "db:restore": "powershell -ExecutionPolicy Bypass -File scripts/restore-data.ps1",
+    "db:inspect-legacy": "powershell -ExecutionPolicy Bypass -File scripts/inspect-legacy-backup.ps1"
+  }
+}

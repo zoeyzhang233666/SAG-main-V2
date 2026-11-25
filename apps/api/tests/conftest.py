@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 
+import httpx
 import pytest
 
 _TMP = tempfile.mkdtemp(prefix="sag-test-")
@@ -18,6 +19,33 @@ os.environ["SAG_LLM_BASE_URL"] = ""
 os.environ["SAG_EMBEDDING_API_KEY"] = ""
 os.environ["SAG_MINERU_API_KEY"] = ""
 os.environ["SAG_MINERU_BASE_URL"] = ""
+# Warmup is a production optimization; avoid racing unrelated source engines in shared test lifespans.
+os.environ["SAG_ENGINE_WARMUP_COUNT"] = "0"
+
+
+@pytest.fixture(autouse=True)
+def _offline_http(monkeypatch):
+    """Real HTTP transports never contact model providers in offline tests.
+
+    ASGITransport and explicit MockTransport fixtures remain untouched. Return a
+    deterministic non-retryable auth response for unmocked outbound requests,
+    matching the missing-credentials behavior the smoke test exercises.
+    """
+    def reject(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": {"message": "Offline test: no external credentials", "type": "invalid_request_error"}},
+            request=request,
+        )
+
+    async def reject_async(_transport, request: httpx.Request) -> httpx.Response:
+        return reject(request)
+
+    def reject_sync(_transport, request: httpx.Request) -> httpx.Response:
+        return reject(request)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", reject_async)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", reject_sync)
 
 
 @pytest.fixture(autouse=True)

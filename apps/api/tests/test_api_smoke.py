@@ -1,5 +1,7 @@
 """HTTP 层冒烟：跑真实 ASGI 应用（含 lifespan / 后台队列），全程离线。"""
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -55,7 +57,7 @@ async def test_end_to_end_offline():
 
             assert _find((await c.get("/api/v1/sources", headers=H)).json())["id"] == sid
 
-            # 上传（不等待后台完成，避免 401 重试拖慢测试）
+            # 上传（先验证 HTTP 返回的排队状态，退出前等待后台队列收尾）
             up = await c.post(
                 f"/api/v1/sources/{sid}/documents",
                 headers=H,
@@ -83,3 +85,6 @@ async def test_end_to_end_offline():
                 "/api/v1/search", headers=H, json={"query": "hello", "source_ids": [sid]}
             )
             assert gs2.status_code == 200
+
+        # Let queued jobs finish before lifespan cancels workers and closes SQLite.
+        await asyncio.wait_for(app.state.job_queue._queue.join(), timeout=20)

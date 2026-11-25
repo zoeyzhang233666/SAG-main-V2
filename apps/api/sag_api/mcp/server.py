@@ -177,7 +177,7 @@ def build_source_mcp(*, stateless_http: bool = False) -> FastMCP:
     mcp = FastMCP(
         "sag-knowledge",
         instructions=(
-            "SAG 知识库 MCP：默认检索全部信源，也可向工具传 source_id 限定范围。"
+            "ChemClaw 知识图谱 MCP：默认检索全部信源，也可向工具传 source_id 限定范围。"
             "先用 list_sources/list_documents 了解资料范围，再用 search、grep、outline、"
             "read 和 get_chunk 获取可引用证据。回答请依据 search 返回的编号证据。"
         ),

@@ -3,6 +3,7 @@ import os
 import pathlib
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -44,4 +45,5 @@ with tempfile.TemporaryDirectory() as work:
                     proc.kill()
                     proc.wait()
             log.seek(0)
-            print(log.read().decode("utf-8", errors="replace"))
+            sys.stdout.buffer.write(log.read().decode("utf-8", errors="replace").encode("utf-8"))
+            sys.stdout.buffer.flush()

@@ -45,6 +45,8 @@ class DocumentStatus(StrEnum):
     LOADING = "loading"        # ingest 中（解析 → 分块 → 入库 → 向量）
     EXTRACTING = "extracting"  # extract 中（事件 / 实体抽取）
     PAUSED = "paused"          # 抽取已暂停，可从 chunk 断点继续
+    DELETING = "deleting"      # 已收到删除请求，后台正在停止关联任务并清理
+    DELETE_FAILED = "delete_failed"
     READY = "ready"            # 处理完成，可检索
     FAILED = "failed"
 
@@ -55,6 +57,7 @@ class JobType(StrEnum):
     INDEX_UNIVERSE = "index_universe"
     STRUCTURED_IMPORT = "structured_import"
     STRUCTURED_INDEX = "structured_index"
+    DELETE_DOCUMENT = "delete_document"
 
 
 class JobStatus(StrEnum):

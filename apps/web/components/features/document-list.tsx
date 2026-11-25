@@ -46,10 +46,11 @@ export function DocumentList({
   }
 
   async function remove(d: Doc) {
+    if (d.status === "deleting") return;
     setPending(d.id);
     try {
-      await api.deleteDocument(sourceId, d.id);
-      toast.success(t("deleted"));
+      const job = await api.deleteDocument(sourceId, d.id);
+      toast.success(t(job.status === "succeeded" ? "deleted" : "deleteQueued"));
       onChange();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : t("deleteFailed"));
@@ -129,8 +130,11 @@ export function DocumentList({
       {documents.map((d, i) => {
         const progress = Math.min(100, Math.max(0, Math.round(d.progress ?? 0)));
         const showProgress =
-          d.status === "loading" || d.status === "extracting" || d.status === "paused";
-        const showMetrics = showProgress || d.status === "failed";
+          d.status === "loading"
+          || d.status === "extracting"
+          || d.status === "paused"
+          || d.status === "deleting";
+        const showMetrics = showProgress || d.status === "failed" || d.status === "delete_failed";
         return (
           <div
             key={d.id}
@@ -170,10 +174,15 @@ export function DocumentList({
                 {showMetrics && (
                   <>
                     <span>·</span>
-                    <span>{progress}% · {t("tokens", { count: formatTokenCount(d.token_usage, locale) })}</span>
+                    <span>
+                      {progress}%
+                      {d.status !== "deleting" && (
+                        <> · {t("tokens", { count: formatTokenCount(d.token_usage, locale) })}</>
+                      )}
+                    </span>
                   </>
                 )}
-                {d.status === "failed" && d.error && (
+                {(d.status === "failed" || d.status === "delete_failed") && d.error && (
                   <>
                     <span>·</span>
                     <span className="truncate text-destructive" title={d.error}>
@@ -228,16 +237,18 @@ export function DocumentList({
                   <RefreshCw className="size-4" />
                 </Button>
               )}
-              <Button
-                variant="ghost"
-                size="icon"
-                title={t("delete")}
-                disabled={pending === d.id}
-                onClick={() => remove(d)}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <Trash2 className="size-4" />
-              </Button>
+              {d.status !== "deleting" && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title={d.status === "delete_failed" ? t("retryDelete") : t("delete")}
+                  disabled={pending === d.id}
+                  onClick={() => remove(d)}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
             </div>
           </div>
         );

@@ -18,6 +18,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from contextvars import Context, copy_context
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -138,6 +139,7 @@ def _utc_time(value: datetime | None) -> datetime | None:
 @dataclass
 class _Slot:
     engine: DataEngine
+    context: Context = field(default_factory=copy_context)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     idle: asyncio.Event = field(default_factory=asyncio.Event)
@@ -149,6 +151,10 @@ class _Slot:
     def __post_init__(self) -> None:
         self.idle.set()
         self.concurrent_allowed.set()
+
+
+    async def close(self) -> None:
+        await asyncio.create_task(self.engine.aclose(), context=self.context)
 
 
 class _EngineLifecycleGate:
@@ -405,21 +411,27 @@ class EngineManager:
                         source_config_id=source_config_id,
                         health_check=False,
                     )
+                    from zleap.sag.db import close_database
+
+                    # zleap-sag resets its global pool synchronously in start().
+                    # Dispose it asynchronously and keep the engine-owned token
+                    # in a context that can also be used from a later close.
+                    await close_database()
+                    slot = _Slot(engine=engine)
                     with map_sag_errors():
-                        await engine.start()
+                        await asyncio.create_task(engine.start(), context=slot.context)
                     try:
                         await self._ensure_source_config(source_config_id, source)
                         await self._ensure_universe_query_indexes()
                     except Exception:
                         try:
-                            await engine.aclose()
+                            await slot.close()
                         except Exception:  # noqa: BLE001 - preserve provisioning error
                             log.exception(
                                 "初始化失败后的引擎关闭异常 source_config_id=%s",
                                 source_config_id,
                             )
                         raise
-                    slot = _Slot(engine=engine)
                     self._slots[source_config_id] = slot
                     await self._evict_lru(keep=source_config_id)
         return slot
@@ -465,7 +477,7 @@ class EngineManager:
             try:
                 await slot.idle.wait()
                 async with slot.lock:
-                    await slot.engine.aclose()
+                    await slot.close()
                 log.info("LRU 逐出引擎 source_config_id=%s（缓存上限 %d）", victim, self._cache_size)
             except Exception as e:  # noqa: BLE001
                 log.warning("逐出引擎失败 %s: %s", victim, e)
@@ -516,43 +528,47 @@ class EngineManager:
         """确保该源的引擎 schema 与父记录就绪（幂等）。"""
         await self._slot(source_config_id, source)
 
+    @asynccontextmanager
+    async def use_mutation(self, source_config_id: str, source: Source | None = None):
+        """Serialize maintenance and drain any concurrent document processors."""
+        while True:
+            slot = await self._slot(source_config_id, source)
+            async with self._lifecycle_gate.read():
+                async with slot.lock:
+                    if slot.closing:
+                        continue
+                    try:
+                        async with slot.state_lock:
+                            slot.concurrent_allowed.clear()
+                        await slot.idle.wait()
+                        yield slot.engine
+                    finally:
+                        async with slot.state_lock:
+                            slot.concurrent_allowed.set()
+                    return
+
     async def delete_document_data(
         self,
         source_config_id: str,
-        document_source_id: str,
+        document_source_id: str | Callable[[], Awaitable[str | None]],
         *,
         source: Source | None = None,
     ) -> None:
         """删除一篇文档的块、事件、关系及孤立实体派生数据。"""
         from sag_api.sag.document_cleanup import delete_document_records
 
-        while True:
-            slot = await self._slot(source_config_id, source)
-            async with self._lifecycle_gate.read():
-                await slot.lock.acquire()
-                try:
-                    if slot.closing:
-                        continue
-                    # Searches already share ``slot.lock``. Pause admission of new
-                    # concurrent document processors, then drain processors that
-                    # entered before this maintenance window.
-                    async with slot.state_lock:
-                        slot.concurrent_allowed.clear()
-                    await slot.idle.wait()
-                    with map_sag_errors():
-                        deleted = await delete_document_records(
-                            source_config_id,
-                            document_source_id,
-                        )
-                finally:
-                    async with slot.state_lock:
-                        slot.concurrent_allowed.set()
-                    slot.lock.release()
-                break
+        async with self.use_mutation(source_config_id, source):
+            article_id = (
+                await document_source_id() if callable(document_source_id) else document_source_id
+            )
+            if article_id is None:
+                return
+            with map_sag_errors():
+                deleted = await delete_document_records(source_config_id, article_id)
         log.info(
             "文档派生数据已清理 source_config_id=%s document_source_id=%s chunks=%d events=%d relations=%d entities=%d",
             source_config_id,
-            document_source_id,
+            article_id,
             len(deleted.chunk_ids),
             len(deleted.event_ids),
             len(deleted.relation_ids),
@@ -581,6 +597,10 @@ class EngineManager:
 
         with map_sag_errors():
             async with self.use_concurrently(source_config_id, source) as engine:
+                if should_pause is not None and await should_pause():
+                    from sag_api.jobs.control import JobPaused
+
+                    raise JobPaused()
                 processor = IncrementalDocumentProcessor(
                     engine,
                     source_config_id,
@@ -2717,7 +2737,7 @@ class EngineManager:
                 try:
                     await slot.idle.wait()
                     async with slot.lock:  # 等待在途操作结束
-                        await slot.engine.aclose()
+                        await slot.close()
                 except Exception as e:  # noqa: BLE001
                     log.warning("释放引擎失败 %s: %s", source_config_id, e)
 
@@ -2733,6 +2753,6 @@ class EngineManager:
                     try:
                         await slot.idle.wait()
                         async with slot.lock:
-                            await slot.engine.aclose()
+                            await slot.close()
                     except Exception as e:  # noqa: BLE001
                         log.warning("关闭引擎失败 %s: %s", scid, e)

@@ -373,6 +373,7 @@ async def test_document_job_sends_parsed_markdown_to_engine(monkeypatch):
         status=None,
         error=None,
         chunk_count=0,
+        content_type="application/pdf",
         event_count=0,
         progress=0,
         token_usage=0,
@@ -393,7 +394,14 @@ async def test_document_job_sends_parsed_markdown_to_engine(monkeypatch):
         async def commit(self):
             pass
 
-        async def execute(self, _statement):
+        async def execute(self, statement):
+            if statement.is_update and statement.table.name == "documents":
+                document.status = statement.compile().params["status"]
+            return SimpleNamespace(
+                rowcount=1, one=lambda: (1, document.chunk_count, document.event_count),
+            )
+
+        async def flush(self):
             pass
 
         async def refresh(self, _instance, attribute_names=None):

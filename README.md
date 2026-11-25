@@ -174,7 +174,7 @@ No API key, Python runtime, Node runtime, or external database is required to bo
 On first launch:
 
 1. Enter your name to create or restore the local identity.
-2. Use the 302.AI quick setup, or open **Settings → Models** and configure any OpenAI-compatible LLM and embedding endpoint.
+2. Use the built-in [APIHub](https://apihub.chem-cloud.cn/keys) quick setup, or open **Settings → Models** to configure an OpenAI-compatible generation and embedding endpoint. Confirm that the embedding model matches your existing index. Local document parsing is the default.
 3. Create a source, upload documents, and wait until their status is **Ready**.
 4. Search, open the original source, or start a cited conversation.
 

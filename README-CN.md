@@ -174,7 +174,7 @@ docker compose up -d --build
 首次使用：
 
 1. 填写名字，创建或恢复本地身份。
-2. 使用 302.AI 快速配置，或进入 **设置 → 模型**，填写任意 OpenAI 兼容的 LLM 与 Embedding 接口。
+2. 使用内置 [APIHub](https://apihub.chem-cloud.cn/keys) 快速配置，或进入 **设置 → 模型**，填写 OpenAI 兼容的 LLM 与 Embedding 接口。已有向量索引须使用兼容的向量模型，文档默认本地解析。
 3. 创建信源并上传文档，等待状态变为**就绪**。
 4. 开始检索、打开原文，或直接进行带引用的对话。
 

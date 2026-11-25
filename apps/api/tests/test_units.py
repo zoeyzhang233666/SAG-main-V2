@@ -92,13 +92,13 @@ async def test_llm_timeout_and_retries_reach_unified_client(monkeypatch):
 
     client = generation_llm.LLMClient(configured)
     assert await client.complete([{"role": "user", "content": "ping"}]) == "pong"
-    assert seen["model"] == "openai/qwen3.6-flash"
+    assert seen["model"] == "openai/deepseek-v4.1-flash"
     assert seen["timeout"] == 45
     assert seen["num_retries"] == 3
 
     engine = build_engine_config(configured)
     assert engine.llm.provider == "litellm"
-    assert engine.llm.model == "openai/qwen3.6-flash"
+    assert engine.llm.model == "openai/deepseek-v4.1-flash"
     assert engine.llm.timeout == 45
     assert engine.llm.max_retries == 3
 
@@ -266,7 +266,7 @@ def test_prompt_and_citations():
     ]
     msgs = build_messages("谁创立了 Acme？", sections, language="zh")
     assert msgs[0]["role"] == "system"
-    assert "Zleap" in msgs[0]["content"] and "你是 sag" not in msgs[0]["content"]
+    assert "ChemClaw" in msgs[0]["content"] and "你是 sag" not in msgs[0]["content"]
     assert "[1]" in msgs[-1]["content"] and "Acme" in msgs[-1]["content"]
     cites = build_citations(
         sections,

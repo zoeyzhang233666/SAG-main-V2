@@ -453,7 +453,7 @@ export function ModelConfigForm() {
                 id="emb-url"
                 value={embBaseUrl}
                 onChange={(event) => setEmbBaseUrl(event.target.value)}
-                placeholder="https://api.302ai.cn/v1"
+                placeholder="https://apihub.chem-cloud.cn/v1"
               />
             </Field>
             <Field>
@@ -531,7 +531,7 @@ export function ModelConfigForm() {
                 id="mineru-url"
                 value={mineruBaseUrl}
                 onChange={(event) => setMineruBaseUrl(event.target.value)}
-                placeholder="https://api.302ai.cn"
+                placeholder="https://…"
               />
               <FieldDescription>{t("mineruPricing")}</FieldDescription>
               {canReuse302Key && !cfg.mineru_api_key_set && (

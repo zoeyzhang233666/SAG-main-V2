@@ -59,7 +59,7 @@ _NULLABLE_FIELDS = frozenset({"llm_base_url", "embedding_base_url", "embedding_d
 
 _OPENAI_COMPATIBLE = get_model_provider("openai")
 
-QUICK_SETUP_302 = {
+QUICK_SETUP_APIHUB = {
     "llm_provider": _OPENAI_COMPATIBLE.id,
     "llm_base_url": _OPENAI_COMPATIBLE.default_base_url,
     "llm_model": _OPENAI_COMPATIBLE.default_model,
@@ -68,18 +68,6 @@ QUICK_SETUP_302 = {
     "llm_context_window": _OPENAI_COMPATIBLE.default_context_window,
     "llm_timeout_ms": 60_000,
     "llm_max_retries": 2,
-    "embedding_model": "Qwen/Qwen3-Embedding-4B",
-    "embedding_base_url": "https://api.302ai.cn/v1",
-    "embedding_dimensions": 1024,
-    "document_parser": "auto",
-    "mineru_base_url": "https://api.302ai.cn",
-    "mineru_version": "2.5",
-    "document_extract_concurrency": 5,
-    "document_chunk_max_tokens": 1_000,
-    "document_chunk_mode": "standard",
-    "search_strategy": "vector",
-    "search_top_k": 8,
-    "sag_language": "zh",
 }
 
 _LEGACY_302_BASE_URLS = {
@@ -107,6 +95,28 @@ def _normalize_overrides(overrides: dict) -> dict:
         normalized.pop("search_strategy", None)
         log.warning("忽略非法的持久化检索策略：%s", strategy)
     return normalized
+
+
+def _migrate_unconfigured_302_defaults(overrides: dict) -> dict:
+    """Migrate only old, uncredentialed defaults; never redirect an existing key."""
+    legacy_urls = set(_LEGACY_302_BASE_URLS.values())
+    if not any(overrides.get(field) in legacy_urls for field in (
+        "llm_base_url", "embedding_base_url", "mineru_base_url"
+    )):
+        return overrides
+    environment = Settings()
+    if any(overrides.get(field) or getattr(environment, field) for field in _SECRET_FIELDS):
+        return overrides
+    result = dict(overrides)
+    if result.get("llm_provider", "openai") == "openai" and result.get("llm_base_url") in legacy_urls:
+        result["llm_base_url"] = _OPENAI_COMPATIBLE.default_base_url
+        if result.get("llm_model") in (None, "qwen3.6-flash"):
+            result["llm_model"] = _OPENAI_COMPATIBLE.default_model
+    for field in ("embedding_base_url", "mineru_base_url"):
+        if result.get(field) in legacy_urls:
+            result[field] = None
+    # Do not change embedding model or dimensions: stored vectors must remain compatible.
+    return result
 
 
 async def load_overrides(session: AsyncSession) -> dict:
@@ -139,7 +149,7 @@ async def apply_startup_overrides(session_factory: async_sessionmaker) -> None:
     async with session_factory() as session:
         row = await _load_row(session)
         raw = dict(row.value) if row and isinstance(row.value, dict) else {}
-        overrides = _normalize_overrides(raw)
+        overrides = _migrate_unconfigured_302_defaults(_normalize_overrides(raw))
         if row is not None and overrides != raw:
             # JSON 列未使用 MutableDict，必须整体重新赋值才能可靠持久化。
             row.value = overrides
@@ -247,15 +257,13 @@ async def save_model_config(session: AsyncSession, patch: dict) -> dict:
     return effective_model_config()
 
 
-async def save_302_quick_setup(session: AsyncSession, api_key: str) -> dict:
-    """用单个 302.AI Key 写入生成、向量、MinerU 与快速检索预设。"""
+async def save_apihub_quick_setup(session: AsyncSession, api_key: str) -> dict:
+    """Configure APIHub generation. Keep existing embedding and parser settings intact."""
     return await save_model_config(
         session,
         {
-            **QUICK_SETUP_302,
+            **QUICK_SETUP_APIHUB,
             "llm_api_key": api_key,
-            "embedding_api_key": api_key,
-            "mineru_api_key": api_key,
         },
     )
 

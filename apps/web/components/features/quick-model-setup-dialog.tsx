@@ -84,7 +84,7 @@ export function QuickModelSetupDialog({
     setSaving(true);
     setError("");
     try {
-      const result = await api.quickSetup302(key);
+      const result = await api.quickSetupApiHub(key);
       setApiKey("");
       setShowKey(false);
       onConfigured(result.capabilities);
@@ -131,7 +131,7 @@ export function QuickModelSetupDialog({
 
           <div className="space-y-4 px-6 py-5">
             <Field data-invalid={Boolean(error)}>
-              <FieldLabel htmlFor="quick-setup-api-key">302.AI API Key</FieldLabel>
+              <FieldLabel htmlFor="quick-setup-api-key">APIHub API Key</FieldLabel>
               <div className="relative">
                 <Input
                   ref={inputRef}
@@ -168,7 +168,8 @@ export function QuickModelSetupDialog({
                 </TooltipProvider>
               </div>
               <FieldDescription id="quick-setup-key-help">
-                {t("keyDescription")}
+                {t("keyDescription")}{" "}
+                <a href="https://apihub.chem-cloud.cn/keys" target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">{t("getApiHubKey")}</a>
               </FieldDescription>
               {error && <FieldError>{error}</FieldError>}
             </Field>

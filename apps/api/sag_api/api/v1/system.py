@@ -143,19 +143,19 @@ async def knowledge_mcp_descriptor(
     }
 
 
-@router.post("/model-setup/302")
-async def quick_setup_302(
+@router.post("/model-setup/apihub")
+async def quick_setup_apihub(
     body: QuickModelSetupRequest,
     request: Request,
     _user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """只接收一个 302.AI Key，写入生成、向量、MinerU 与检索预设。"""
+    """Configure the built-in APIHub endpoint without changing vector or parser settings."""
     status = await settings_service.model_setup_status(session)
     if not status["required"]:
         raise ConflictError("模型配置已存在，请在设置中修改")
 
-    config = await settings_service.save_302_quick_setup(session, body.api_key)
+    config = await settings_service.save_apihub_quick_setup(session, body.api_key)
     await request.app.state.engine_manager.aclose_all()
     return {"config": config, "capabilities": _capabilities()}
 

@@ -62,14 +62,15 @@ def test_timezone_defaults_to_beijing_and_rejects_invalid(monkeypatch):
         Settings(_env_file=None)
 
 
-def test_provider_base_urls_default_to_302_china_endpoint(monkeypatch):
+def test_provider_base_urls_default_to_apihub(monkeypatch):
     for name in ("SAG_LLM_BASE_URL", "SAG_EMBEDDING_BASE_URL", "SAG_MINERU_BASE_URL"):
         monkeypatch.delenv(name, raising=False)
     configured = Settings(_env_file=None)
     assert configured.llm_provider == "openai"
-    assert configured.llm_base_url == "https://api.302ai.cn/v1"
-    assert configured.embedding_base_url == "https://api.302ai.cn/v1"
-    assert configured.mineru_base_url == "https://api.302ai.cn"
+    assert configured.llm_base_url == "https://apihub.chem-cloud.cn/v1"
+    assert configured.embedding_base_url is None
+    assert configured.effective_embedding_base_url == configured.llm_base_url
+    assert configured.mineru_base_url is None
 
 
 @pytest.mark.asyncio
@@ -86,6 +87,7 @@ async def test_legacy_atomic_db_strategy_is_migrated():
         for field in (
             "search_strategy",
             "llm_base_url",
+            "llm_model",
             "embedding_base_url",
             "mineru_base_url",
         )
@@ -109,17 +111,17 @@ async def test_legacy_atomic_db_strategy_is_migrated():
 
         await apply_startup_overrides(SessionLocal)
         assert settings.search_strategy == "multi"
-        assert settings.llm_base_url == "https://api.302ai.cn/v1"
-        assert settings.embedding_base_url == "https://api.302ai.cn/v1"
-        assert settings.mineru_base_url == "https://api.302ai.cn"
+        assert settings.llm_base_url == "https://apihub.chem-cloud.cn/v1"
+        assert settings.embedding_base_url is None
+        assert settings.mineru_base_url is None
 
         async with SessionLocal() as session:
             row = await session.scalar(select(Setting).where(Setting.scope == "global", Setting.key == "model_config"))
             assert row is not None
             assert row.value["search_strategy"] == "multi"
-            assert row.value["llm_base_url"] == "https://api.302ai.cn/v1"
-            assert row.value["embedding_base_url"] == "https://api.302ai.cn/v1"
-            assert row.value["mineru_base_url"] == "https://api.302ai.cn"
+            assert row.value["llm_base_url"] == "https://apihub.chem-cloud.cn/v1"
+            assert row.value["embedding_base_url"] is None
+            assert row.value["mineru_base_url"] is None
     finally:
         async with SessionLocal() as session:
             await session.execute(delete(Setting).where(Setting.scope == "global", Setting.key == "model_config"))
@@ -361,3 +363,14 @@ async def test_model_config_crud_masking_and_test(monkeypatch: pytest.MonkeyPatc
             await s.commit()
         for key, value in snapshot.items():
             setattr(settings, key, value)
+
+
+def test_legacy_provider_credentials_are_not_redirected():
+    from sag_api.services.settings_service import _migrate_unconfigured_302_defaults
+
+    old = {
+        "llm_base_url": "https://api.302ai.cn/v1",
+        "llm_api_key": "test-legacy-key",
+        "embedding_base_url": "https://api.302ai.cn/v1",
+    }
+    assert _migrate_unconfigured_302_defaults(old) == old

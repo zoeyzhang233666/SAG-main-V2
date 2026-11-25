@@ -141,6 +141,33 @@ async def reprocess_document(
     session: AsyncSession, source: Source, document_id: str, *, job_queue: JobQueue
 ) -> Job:
     document = await _lock_document_for_processing(session, source, document_id)
+    if document.content_type == "application/x-chemclaw-structured":
+        if not document.sag_source_id:
+            raise ConflictError("结构化文档没有可索引的图谱记录")
+        if not settings.effective_embedding_api_key:
+            raise ConflictError("配置 Embedding 后可重建语义索引")
+        active = await session.scalars(
+            select(Job).where(
+                Job.source_id == source.id,
+                Job.type == JobType.STRUCTURED_INDEX,
+                Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+            )
+        )
+        for index_job in active:
+            if document.sag_source_id in (index_job.payload or {}).get("article_ids", []):
+                return index_job
+        job = Job(
+            type=JobType.STRUCTURED_INDEX,
+            source_id=source.id,
+            document_id=document.id,
+            status=JobStatus.QUEUED,
+            payload={"article_ids": [document.sag_source_id], "stage": "queued"},
+        )
+        session.add(job)
+        await session.commit()
+        await job_queue.enqueue(job.id)
+        return job
+
     latest = await session.scalar(
         select(Job).where(
             Job.document_id == document.id, Job.type == JobType.PROCESS_DOCUMENT,
@@ -152,8 +179,6 @@ async def reprocess_document(
         JobStatus.PAUSED,
     }:
         return latest
-    if document.content_type == "application/x-chemclaw-structured":
-        raise ConflictError("结构化文档已通过导入建立关系数据，无需重新抽取")
     restart_from_scratch = document.status == DocumentStatus.READY
     document.status = DocumentStatus.PENDING
     document.error = None

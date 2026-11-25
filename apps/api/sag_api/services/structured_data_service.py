@@ -470,8 +470,10 @@ async def index_structured_data(
 
     from sag_api.core.db import SessionLocal
 
-    if not settings.effective_embedding_api_key or not article_ids:
+    if not article_ids:
         return
+    if not settings.effective_embedding_api_key:
+        raise ValidationError("配置 Embedding 后可建立语义索引")
     await _ensure_embedding_usable()
 
     source_config_id = source.sag_source_config_id

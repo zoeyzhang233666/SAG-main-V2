@@ -10,12 +10,14 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_delete_enqueues_job_and_pauses_structured_index():
+async def test_delete_enqueues_job_and_pauses_structured_index(monkeypatch):
+    from sag_api.core.config import settings
     from sag_api.core.db import SessionLocal
     from sag_api.db.models import Document, Job, Source
     from sag_api.enums import DocumentStatus, JobStatus, JobType
     from sag_api.main import app
 
+    monkeypatch.setattr(settings, "embedding_api_key", "offline-fixture-key")
     article_id = uuid.uuid4().hex
     transport = httpx.ASGITransport(app=app)
     async with app.router.lifespan_context(app):
@@ -69,6 +71,14 @@ async def test_delete_enqueues_job_and_pauses_structured_index():
                 await session.commit()
                 await session.refresh(index_job)
                 index_job_id = index_job.id
+
+            reindex = await client.post(
+                f"/api/v1/sources/{source_id}/documents/{document_id}/reprocess",
+                headers=headers,
+            )
+            assert reindex.status_code == 200
+            assert reindex.json()["type"] == "structured_index"
+            assert reindex.json()["id"] == index_job_id
 
             deleted = await client.delete(
                 f"/api/v1/sources/{source_id}/documents/{document_id}",

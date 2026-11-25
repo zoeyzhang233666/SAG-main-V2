@@ -36,7 +36,9 @@ export function DocumentList({
     setPending(d.id);
     try {
       await api.reprocessDocument(sourceId, d.id);
-      toast.success(t("requeued"));
+      toast.success(t(
+        d.content_type === "application/x-chemclaw-structured" ? "indexRequeued" : "requeued"
+      ));
       onChange();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : t("operationFailed"));
@@ -230,7 +232,9 @@ export function DocumentList({
                 <Button
                   variant="ghost"
                   size="icon"
-                  title={t("reprocess")}
+                  title={t(
+                    d.content_type === "application/x-chemclaw-structured" ? "rebuildIndex" : "reprocess"
+                  )}
                   disabled={pending === d.id}
                   onClick={() => reprocess(d)}
                 >

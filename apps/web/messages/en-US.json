@@ -366,6 +366,8 @@
     "tokens": "{count} tokens",
     "pause": "Stop extraction",
     "resume": "Resume extraction",
+    "rebuildIndex": "Rebuild semantic index",
+    "indexRequeued": "Semantic indexing queued",
     "reprocess": "Reprocess",
     "delete": "Delete"
   },

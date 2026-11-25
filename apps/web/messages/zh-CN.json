@@ -366,6 +366,8 @@
     "tokens": "{count} tokens",
     "pause": "停止抽取",
     "resume": "继续抽取",
+    "rebuildIndex": "重建语义索引",
+    "indexRequeued": "已提交语义索引任务",
     "reprocess": "重新处理",
     "delete": "删除"
   },

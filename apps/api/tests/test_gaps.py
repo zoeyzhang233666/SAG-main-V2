@@ -1,6 +1,5 @@
 """回归：删除信源收尾（绑定清理 + 引擎槽释放 + 上传目录移除）、注册开关。"""
 
-import asyncio
 import os
 
 import httpx
@@ -64,5 +63,3 @@ async def test_delete_cleanup_and_registration():
             finally:
                 settings.allow_registration = True
 
-        # Let queued jobs finish before lifespan cancels workers and closes SQLite.
-        await asyncio.wait_for(app.state.job_queue._queue.join(), timeout=20)

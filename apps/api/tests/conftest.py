@@ -1,5 +1,6 @@
 """测试夹具：在导入 sag_api 之前把配置指向临时目录（settings 为进程级单例）。"""
 
+import asyncio
 import os
 import sys
 import tempfile
@@ -46,6 +47,36 @@ def _offline_http(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", reject_async)
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", reject_sync)
+
+
+@pytest.fixture(autouse=True)
+def _drain_test_job_queues(monkeypatch):
+    """Keep test lifespan shutdown from cancelling workers during SQLite writes.
+
+    Tests use offline model transports, so queued work must finish promptly.
+    A stuck queue still fails the test (rather than hiding a lock or skipping
+    cleanup). Production stop/recovery behavior is left unchanged.
+    """
+    from sag_api.jobs.inproc import InProcessAsyncQueue
+
+    original_stop = InProcessAsyncQueue.stop
+
+    async def drain(queue):
+        while True:
+            await queue._queue.join()
+            retries = list(queue._retry_tasks)
+            if not retries:
+                return
+            await asyncio.gather(*retries)
+
+    async def stop_after_drain(queue):
+        try:
+            if queue._workers:
+                await asyncio.wait_for(drain(queue), timeout=45)
+        finally:
+            await original_stop(queue)
+
+    monkeypatch.setattr(InProcessAsyncQueue, "stop", stop_after_drain)
 
 
 @pytest.fixture(autouse=True)

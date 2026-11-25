@@ -1,6 +1,5 @@
 """实体读路径：注入事件—实体图谱后验证 entities 端点（离线）。"""
 
-import asyncio
 import uuid
 
 import httpx
@@ -269,5 +268,3 @@ async def test_entity_read_path():
             assert empty_graph["relations"] == []
             assert empty_graph["truncated"] is False
 
-        # Let queued jobs finish before lifespan cancels workers and closes SQLite.
-        await asyncio.wait_for(app.state.job_queue._queue.join(), timeout=20)

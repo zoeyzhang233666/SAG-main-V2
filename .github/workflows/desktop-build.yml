@@ -1,0 +1,99 @@
+name: ChemClaw Knowledge Graph desktop build
+on:
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'apps/api/**'
+      - 'apps/web/**'
+      - '.github/workflows/desktop-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-test-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  package:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            label: macOS ARM64 DMG
+            arch: arm64
+            platform: mac
+            installer: '*.dmg'
+          - os: windows-2025
+            label: Windows x64 EXE
+            arch: x64
+            platform: win
+            installer: '*.exe'
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      SAG_NOTARIZE: 'false'
+      SAG_DESKTOP_API_PORT: '18100'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/desktop/package-lock.json
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - name: Verify native architecture
+        shell: bash
+        run: |
+          test "$(node -p 'process.arch')" = "${{ matrix.arch }}"
+          python -c 'import platform; assert platform.machine().lower() in ({"arm64","aarch64"} if "${{ matrix.arch }}" == "arm64" else {"amd64","x86_64"})'
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+      - name: Install Electron dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Install pinned backend and freezing tool
+        working-directory: apps/api
+        run: |
+          uv sync --frozen --no-dev
+          uv pip install --python .venv "pyinstaller==6.16.0"
+      - name: Compile Electron
+        working-directory: apps/desktop
+        run: npm run build
+      - name: Build existing Web frontend
+        working-directory: apps/desktop
+        run: npm run build:web
+      - name: Freeze Python API
+        working-directory: apps/desktop
+        run: npm run build:backend
+      - name: Verify frozen API with empty local database
+        run: python apps/desktop/scripts/smoke-backend.py
+      - name: Assemble application runtime
+        working-directory: apps/desktop
+        run: |
+          npm run prepare:resources
+          node scripts/generate-icon.mjs
+      - name: Build internal test installer
+        working-directory: apps/desktop
+        run: npm run package:${{ matrix.platform }}
+      - name: Upload installer (not a public release)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: chemclaw-kg-${{ matrix.platform }}-${{ matrix.arch }}
+          path: apps/desktop/release/${{ matrix.installer }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

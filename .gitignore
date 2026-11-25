@@ -41,3 +41,11 @@ npm-debug.log*
 
 # skill installer output (npx skills add)
 .agents/
+
+# Desktop build outputs
+apps/desktop/dist/
+apps/desktop/build/
+apps/desktop/release/
+apps/desktop/assets/icon.png
+apps/api/build/
+apps/api/dist/

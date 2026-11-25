@@ -12,6 +12,10 @@ const nextConfig = {
   async redirects() {
     // v0.3 客户端形态：旧路由 → 新 IA
     return [
+      // Removed duplicate desktop-agent pages: keep old bookmarks usable.
+      { source: "/agents", destination: "/chat", permanent: false },
+      { source: "/skills", destination: "/chat", permanent: false },
+      { source: "/schedule", destination: "/chat", permanent: false },
       { source: "/overview", destination: "/chat", permanent: false },
       { source: "/assistants", destination: "/chat", permanent: false },
       { source: "/assistants/:id", destination: "/chat", permanent: false },

@@ -6,8 +6,6 @@ import { useLocale, useTranslations } from "next-intl";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Archive,
-  Bot,
-  CalendarDays,
   ChevronDown,
   ChevronUp,
   ChevronsUpDown,
@@ -16,7 +14,6 @@ import {
   MessageSquarePlus,
   PlugZap,
   Settings,
-  WandSparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -217,9 +214,6 @@ export function AppSidebar({ contained = false }: { contained?: boolean }) {
               </SidebarMenuButton>
             </SidebarMenuItem>
             {([
-              { href: "/agents", key: "agents", icon: Bot },
-              { href: "/skills", key: "skills", icon: WandSparkles },
-              { href: "/schedule", key: "schedule", icon: CalendarDays },
               { href: "/connections", key: "connections", icon: PlugZap },
             ] as const).map((item) => {
               const Icon = item.icon;

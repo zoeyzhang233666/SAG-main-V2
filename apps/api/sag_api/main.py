@@ -21,8 +21,6 @@ from sag_api.core.logging import RequestContextMiddleware, configure_logging, ge
 from sag_api.generation import LLMClient
 from sag_api.jobs import InProcessAsyncQueue
 from sag_api.sag import EngineManager
-from sag_api.services.schedule_service import ScheduleRunner
-from sag_api.tools import registry as tool_registry
 
 log = get_logger("app")
 
@@ -67,13 +65,8 @@ async def lifespan(app: FastAPI):
         SessionLocal, app.state.engine_manager, concurrency=settings.job_concurrency
     )
     await app.state.job_queue.start()
-    app.state.schedule_runner = ScheduleRunner(
-        engine_manager=app.state.engine_manager,
-        llm=app.state.llm,
-        tool_registry=tool_registry,
-        runtime=app.state.agent_runtime,
-    )
-    await app.state.schedule_runner.start()
+    # Scheduling belongs to the standalone ChemClaw desktop client.
+    # Keep the existing database tables and stored tasks intact.
 
     # 后台预热最近使用的信源引擎（不阻塞启动；失败不影响服务）
     warmup_task = asyncio.create_task(_warmup_engines(app.state.engine_manager))
@@ -99,7 +92,6 @@ async def lifespan(app: FastAPI):
         warmup_task.cancel()
         with suppress(asyncio.CancelledError):
             await warmup_task
-        await app.state.schedule_runner.stop()
         await app.state.agent_runtime.stop()
         await app.state.job_queue.stop()
         await app.state.engine_manager.aclose_all()

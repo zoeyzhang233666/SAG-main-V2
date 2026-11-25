@@ -74,3 +74,18 @@ async def test_agents_flow_offline():
             assert any(a["id"] == aid for a in (await c.get("/api/v1/agents", headers=H)).json())
             assert (await c.delete(f"/api/v1/agents/{aid}", headers=H)).status_code == 200
             assert not any(a["id"] == aid for a in (await c.get("/api/v1/agents", headers=H)).json())
+
+
+def test_legacy_default_branding_preserves_custom_identity():
+    from sag_api.branding import DEFAULT_AGENT_NAME, PRODUCT_NAME
+    from sag_api.db.models import Agent
+    from sag_api.services.agent_domain import _DEFAULT_PERSONA, _is_legacy_default_agent
+
+    assert PRODUCT_NAME == "ChemClaw Knowledge Graph"
+    assert DEFAULT_AGENT_NAME == "ChemClaw"
+    assert _is_legacy_default_agent(Agent(name="Zleap", avatar="AI", persona=dict(_DEFAULT_PERSONA)))
+    assert _is_legacy_default_agent(Agent(name="sag", avatar="s", persona=dict(_DEFAULT_PERSONA)))
+    assert not _is_legacy_default_agent(
+        Agent(name="Zleap", avatar="AI", persona={**_DEFAULT_PERSONA, "system_prompt": "custom"})
+    )
+    assert not _is_legacy_default_agent(Agent(name="Custom", avatar="AI", persona=dict(_DEFAULT_PERSONA)))

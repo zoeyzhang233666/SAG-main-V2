@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/readme/zleap-readme-header.png" alt="Zleap 与宇航员" width="294" />
+  <img src="apps/web/app/icon.svg" alt="ChemClaw Knowledge Graph" width="128" />
 </p>
 
-<h1 align="center">SAG</h1>
+<h1 align="center">ChemClaw Knowledge Graph</h1>
 
 <p align="center">
   <a href="README.md">English</a> · <strong>简体中文</strong>
@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://arxiv.org/abs/2606.15971"><img alt="论文" src="https://img.shields.io/badge/paper-arXiv%3A2606.15971-18181b" /></a>
   <a href="https://pypi.org/project/zleap-sag/"><img alt="PyPI" src="https://img.shields.io/pypi/v/zleap-sag?label=zleap--sag&color=18181b" /></a>
-  <img alt="SAG 版本" src="https://img.shields.io/badge/SAG-v1.2.2-18181b" />
+  <img alt="ChemClaw Knowledge Graph 1.2.2" src="https://img.shields.io/badge/ChemClaw%20KG-v1.2.2-F16A45" />
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776ab" />
   <img alt="Node" src="https://img.shields.io/badge/Node-20%2B-339933" />
   <a href="LICENSE"><img alt="许可" src="https://img.shields.io/badge/license-MIT-18181b" /></a>
@@ -23,7 +23,7 @@
   基于 SOTA 的 SAG 架构，把分散的文档与数据变成可搜索、可关联、可追溯的知识。
 </p>
 
-https://github.com/user-attachments/assets/cae70570-3885-490f-9126-dea23dcb369c
+本项目是基于[上游 SAG](https://github.com/Zleap-AI/SAG) 定制的独立 ChemClaw 知识图谱应用。下文的技术架构、跑分及历史截图来自上游项目。
 
 ## 目录
 
@@ -161,8 +161,8 @@ SAG 内部的语义路径和结构路径都是 SAG 自己检索管线的组成�
 准备 Docker Desktop，或 Docker Engine 与 Compose v2。
 
 ```bash
-git clone https://github.com/Zleap-AI/SAG.git
-cd SAG
+git clone https://github.com/zoeyzhang233666/SAG-main-V2.git
+cd SAG-main-V2
 docker compose up -d --build
 ```
 

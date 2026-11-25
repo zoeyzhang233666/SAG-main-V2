@@ -6,7 +6,17 @@ on:
       - 'apps/api/**'
       - 'apps/web/**'
       - '.github/workflows/desktop-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/desktop-build.yml'
+      - 'apps/desktop/package.json'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish verified installers to GitHub Releases
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -118,3 +128,75 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+  release:
+    name: Publish verified desktop prerelease
+    needs: package
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Require successful main CI for this exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          ci_id=""
+          for attempt in $(seq 1 30); do
+            ci_id=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --limit 10 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -n "$ci_id" ]; then break; fi
+            sleep 5
+          done
+          test -n "$ci_id"
+          gh run watch "$ci_id" --exit-status --interval 10
+      - name: Download and verify both installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./apps/desktop/package.json").version')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "KG_VERSION=$version" >> "$GITHUB_ENV"
+          mkdir -p release-assets
+          gh run download "$GITHUB_RUN_ID" --name chemclaw-kg-mac-arm64 --dir release-assets
+          gh run download "$GITHUB_RUN_ID" --name chemclaw-kg-win-x64 --dir release-assets
+          cd release-assets
+          test -s "ChemClaw-KG-${version}-mac-arm64.dmg"
+          test -s "ChemClaw-KG-Setup-${version}-win-x64.exe"
+          sha256sum "ChemClaw-KG-${version}-mac-arm64.dmg" "ChemClaw-KG-Setup-${version}-win-x64.exe" > SHA256SUMS.txt
+      - name: Publish versioned prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$KG_VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::Release $tag already exists; bump the version before publishing again."
+            exit 1
+          fi
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists; refusing to overwrite it."
+            exit 1
+          fi
+          cat > release-notes.md <<'NOTES'
+          ChemClaw 知识图谱独立桌面测试版 / Standalone desktop preview.
+
+          - macOS Apple Silicon (ARM64) DMG and Windows x64 EXE.
+          - Structured SAG import, knowledge Q&A, exploration and 2D/3D graphs.
+          - ChemClaw branding and built-in APIHub generation configuration; confirm embedding compatibility separately.
+          - No bundled knowledge database or API credentials.
+          - macOS ad-hoc signed, not notarized; Windows unsigned. Real-device validation of this build is still required.
+          - Automatic updates are disabled. Back up existing local knowledge data before upgrading.
+
+          Based on the upstream SAG engine; original license and attribution retained.
+          NOTES
+          gh release create "$tag" --target "$GITHUB_SHA" --title "ChemClaw Knowledge Graph $KG_VERSION" --prerelease --notes-file release-notes.md \
+            "release-assets/ChemClaw-KG-${KG_VERSION}-mac-arm64.dmg" \
+            "release-assets/ChemClaw-KG-Setup-${KG_VERSION}-win-x64.exe" \
+            release-assets/SHA256SUMS.txt

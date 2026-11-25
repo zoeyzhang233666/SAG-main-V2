@@ -128,7 +128,7 @@ export function ProjectDataReader({ sourceId, documents }: { sourceId: string; d
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4">
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {[
           [FileText, t("documents"), summary?.documents],

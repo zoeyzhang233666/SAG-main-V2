@@ -83,7 +83,7 @@ export default function SourceDetailPage() {
     <div
       className={cn(
         "min-h-full",
-        wideViewActive && "flex h-full min-h-0 flex-col overflow-hidden",
+        graphViewActive && "flex h-full min-h-0 flex-col overflow-hidden",
       )}
     >
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-4 border-b px-4 py-5 md:px-6">
@@ -187,9 +187,8 @@ export default function SourceDetailPage() {
       <div
         className={cn(
           "mx-auto flex w-full flex-col gap-4 p-4 transition-[max-width,padding]",
-          wideViewActive
-            ? "min-h-0 max-w-none flex-1 overflow-hidden md:p-5"
-            : "max-w-4xl md:p-6",
+          wideViewActive ? "max-w-none md:p-5" : "max-w-4xl md:p-6",
+          graphViewActive && "min-h-0 flex-1 overflow-hidden",
         )}
       >
         {capabilities && !capabilities.llm_configured && (
@@ -206,7 +205,9 @@ export default function SourceDetailPage() {
           </Alert>
         )}
 
-        <div className={cn(wideViewActive && "flex min-h-0 flex-1 flex-col")}>
+        {/* Only graph canvases need a bounded viewport. Data and document lists
+            grow naturally within DetailPanelMain’s vertical scroll container. */}
+        <div className={cn(graphViewActive && "flex min-h-0 flex-1 flex-col")}>
           <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-3">
             <h2 className="text-sm font-medium text-muted-foreground">
               {contentView === "list"

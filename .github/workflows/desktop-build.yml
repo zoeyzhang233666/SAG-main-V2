@@ -88,7 +88,28 @@ jobs:
           node scripts/generate-icon.mjs
       - name: Build internal test installer
         working-directory: apps/desktop
+        # Only same-repository PRs reach this job. No signing credentials are supplied.
+        env:
+          CSC_FOR_PULL_REQUEST: 'true'
         run: npm run package:${{ matrix.platform }}
+      - name: Verify ad-hoc signature in actual macOS DMG
+        if: matrix.platform == 'mac'
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          app='release/mac-arm64/ChemClaw Knowledge Graph.app'
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | tee "$RUNNER_TEMP/kg-signature.txt"
+          grep -F 'Signature=adhoc' "$RUNNER_TEMP/kg-signature.txt"
+          dmg=$(find release -maxdepth 1 -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          hdiutil verify "$dmg"
+          mount_dir=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg"
+          trap 'hdiutil detach "$mount_dir"; rmdir "$mount_dir"' EXIT
+          codesign --verify --deep --strict --verbose=2 "$mount_dir/ChemClaw Knowledge Graph.app"
+          file "$mount_dir/ChemClaw Knowledge Graph.app/Contents/MacOS/ChemClaw Knowledge Graph" | grep -F arm64
       - name: Upload installer (not a public release)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

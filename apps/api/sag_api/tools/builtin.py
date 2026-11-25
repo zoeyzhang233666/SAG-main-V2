@@ -570,7 +570,7 @@ class WebSearchTool(Tool):
         endpoint = _web_search_endpoint()
         if endpoint is None or not settings.llm_api_key:
             return ToolResult(
-                content="（内置联网搜索尚未配置 302.AI 接口与 API Key）",
+                content="（内置联网搜索服务尚未配置，请在连接中配置可用的外部搜索工具）",
                 data={"section_count": 0},
             )
 

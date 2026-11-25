@@ -177,7 +177,10 @@ _DEFAULT_PERSONA = {"greeting": _DEFAULT_GREETING, "system_prompt": ""}
 
 def _is_legacy_default_agent(agent: Agent) -> bool:
     """仅识别旧版本完全未自定义的默认助手，避免覆盖用户修改。"""
-    return agent.name == "sag" and agent.avatar in {"s", "S"} and (agent.persona or {}) == _DEFAULT_PERSONA
+    return (
+        (agent.name == "sag" and agent.avatar in {"s", "S"})
+        or (agent.name == "Zleap" and agent.avatar == "AI")
+    ) and (agent.persona or {}) == _DEFAULT_PERSONA
 
 
 async def get_default_agent(session: AsyncSession) -> Agent:

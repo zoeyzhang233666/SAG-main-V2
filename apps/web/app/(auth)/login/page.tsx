@@ -3,7 +3,8 @@
 import * as React from "react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Sparkles } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+import Image from "next/image";
 import { toast } from "sonner";
 
 import { api, ApiError } from "@/lib/api";
@@ -43,9 +44,7 @@ export default function LaunchPage() {
     <main className="relative flex min-h-[100svh] w-full flex-col px-5 py-5 sm:px-9 sm:py-7">
       <header className="relative z-30 flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5" aria-label={PRODUCT_NAME}>
-          <span className="grid size-8 place-items-center rounded-md border bg-background/70 shadow-soft backdrop-blur-md">
-            <Sparkles className="size-4" />
-          </span>
+          <Image src="/icon.svg" alt="" width={32} height={32} unoptimized className="size-8" />
           <span className="font-display text-sm font-semibold">{PRODUCT_NAME}</span>
         </div>
         <div className="flex items-center gap-1">

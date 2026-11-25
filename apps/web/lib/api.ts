@@ -408,9 +408,9 @@ export const api = {
   getModelProviders: () =>
     request<ModelProviderSpec[]>("/api/v1/system/model-providers"),
   modelSetupStatus: () => request<ModelSetupStatus>("/api/v1/system/model-setup"),
-  quickSetup302: (apiKey: string) =>
+  quickSetupApiHub: (apiKey: string) =>
     request<{ config: ModelConfig; capabilities: Capabilities }>(
-      "/api/v1/system/model-setup/302",
+      "/api/v1/system/model-setup/apihub",
       {
         method: "POST",
         body: JSON.stringify({ api_key: apiKey }),

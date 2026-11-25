@@ -13,6 +13,9 @@ from typing import Literal
 
 ModelProviderId = Literal["openai", "anthropic", "gemini"]
 
+APIHUB_BASE_URL = "https://apihub.chem-cloud.cn/v1"
+APIHUB_DEFAULT_MODEL = "deepseek-v4.1-flash"
+
 
 @dataclass(frozen=True, slots=True)
 class ModelProviderSpec:
@@ -45,11 +48,11 @@ class ModelProviderSpec:
 _PROVIDER_SPECS = (
     ModelProviderSpec(
         id="openai",
-        display_name="OpenAI-compatible",
+        display_name="APIHub / OpenAI-compatible",
         protocol="openai_chat_completions",
         litellm_prefix="openai",
-        default_model="qwen3.6-flash",
-        default_base_url="https://api.302ai.cn/v1",
+        default_model=APIHUB_DEFAULT_MODEL,
+        default_base_url=APIHUB_BASE_URL,
         default_context_window=128_000,
         default_temperature=0.3,
         temperature_configurable=True,

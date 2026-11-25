@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/readme/zleap-readme-header.png" alt="Zleap and astronaut" width="294" />
+  <img src="apps/web/app/icon.svg" alt="ChemClaw Knowledge Graph" width="128" />
 </p>
 
-<h1 align="center">SAG</h1>
+<h1 align="center">ChemClaw Knowledge Graph</h1>
 
 <p align="center">
   <strong>English</strong> · <a href="README-CN.md">简体中文</a>
@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://arxiv.org/abs/2606.15971"><img alt="Paper" src="https://img.shields.io/badge/paper-arXiv%3A2606.15971-18181b" /></a>
   <a href="https://pypi.org/project/zleap-sag/"><img alt="PyPI" src="https://img.shields.io/pypi/v/zleap-sag?label=zleap--sag&color=18181b" /></a>
-  <img alt="SAG version" src="https://img.shields.io/badge/SAG-v1.2.2-18181b" />
+  <img alt="ChemClaw Knowledge Graph 1.2.2" src="https://img.shields.io/badge/ChemClaw%20KG-v1.2.2-F16A45" />
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776ab" />
   <img alt="Node" src="https://img.shields.io/badge/Node-20%2B-339933" />
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-18181b" /></a>
@@ -23,7 +23,7 @@
   Built on the state-of-the-art SAG architecture, it turns scattered documents and data into knowledge that is searchable, connected, and traceable.
 </p>
 
-https://github.com/user-attachments/assets/9bb618e9-fef8-4d07-8a30-3f7d83beb0ff
+This independent ChemClaw application is based on [upstream SAG](https://github.com/Zleap-AI/SAG). The architecture, benchmarks and historical screenshots below describe the upstream project.
 
 ## Contents
 
@@ -161,8 +161,8 @@ See the [paper](https://arxiv.org/abs/2606.15971) and [SAG-Benchmark](https://gi
 Requirements: Docker Desktop, or Docker Engine with Compose v2.
 
 ```bash
-git clone https://github.com/Zleap-AI/SAG.git
-cd SAG
+git clone https://github.com/zoeyzhang233666/SAG-main-V2.git
+cd SAG-main-V2
 docker compose up -d --build
 ```
 
@@ -174,7 +174,7 @@ No API key, Python runtime, Node runtime, or external database is required to bo
 On first launch:
 
 1. Enter your name to create or restore the local identity.
-2. Use the 302.AI quick setup, or open **Settings → Models** and configure any OpenAI-compatible LLM and embedding endpoint.
+2. Use the built-in [APIHub](https://apihub.chem-cloud.cn/keys) quick setup, or open **Settings → Models** to configure an OpenAI-compatible generation and embedding endpoint. Confirm that the embedding model matches your existing index. Local document parsing is the default.
 3. Create a source, upload documents, and wait until their status is **Ready**.
 4. Search, open the original source, or start a cited conversation.
 

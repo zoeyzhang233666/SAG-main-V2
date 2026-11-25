@@ -2,12 +2,11 @@
 
 import * as React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useLocale, useTranslations } from "next-intl";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Archive,
-  Bot,
-  CalendarDays,
   ChevronDown,
   ChevronUp,
   ChevronsUpDown,
@@ -16,7 +15,6 @@ import {
   MessageSquarePlus,
   PlugZap,
   Settings,
-  WandSparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -60,9 +58,7 @@ function Brand() {
       <SidebarMenuItem>
         <SidebarMenuButton size="lg" className="h-14" asChild>
           <Link href="/chat">
-            <div className="flex aspect-square size-10 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/85 text-primary-foreground">
-              <span className="text-base font-semibold">C</span>
-            </div>
+            <Image src="/icon.svg" alt="" width={40} height={40} unoptimized className="size-10 shrink-0" />
             <div className="grid flex-1 text-left leading-tight">
               <span className="truncate text-base font-semibold">{PRODUCT_NAME}</span>
               <span className="truncate text-xs text-muted-foreground">{t("brandTagline")}</span>
@@ -217,9 +213,6 @@ export function AppSidebar({ contained = false }: { contained?: boolean }) {
               </SidebarMenuButton>
             </SidebarMenuItem>
             {([
-              { href: "/agents", key: "agents", icon: Bot },
-              { href: "/skills", key: "skills", icon: WandSparkles },
-              { href: "/schedule", key: "schedule", icon: CalendarDays },
               { href: "/connections", key: "connections", icon: PlugZap },
             ] as const).map((item) => {
               const Icon = item.icon;

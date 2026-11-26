@@ -28,6 +28,7 @@ log = get_logger("tools.web_search")
 
 _WEB_SEARCH_HOSTS = frozenset({"api.302.ai", "api.302ai.cn"})
 _WEB_SEARCH_PROVIDER = "tavily"
+_TAVILY_SEARCH_ENDPOINT = "https://api.tavily.com/search"
 _WEB_RESULT_CONTENT_LIMIT = 1_200
 _WEB_REFERENCE_SNIPPET_LIMIT = 320
 _WEB_PAGE_MAX_BYTES = 2 * 1024 * 1024
@@ -487,6 +488,8 @@ def _web_results(payload: Any, *, limit: int) -> list[dict[str, str]]:
         return []
     raw_results = payload.get("search_results")
     if not isinstance(raw_results, list):
+        raw_results = payload.get("results")
+    if not isinstance(raw_results, list):
         data = payload.get("data")
         raw_results = data.get("results") if isinstance(data, dict) else []
 
@@ -559,7 +562,7 @@ class WebSearchTool(Tool):
 
     @staticmethod
     def configured() -> bool:
-        return bool(_web_search_endpoint() and settings.llm_api_key)
+        return bool(settings.tavily_api_key or (_web_search_endpoint() and settings.llm_api_key))
 
     async def invoke(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         del ctx
@@ -567,10 +570,12 @@ class WebSearchTool(Tool):
         if not query:
             return ToolResult(content="（联网搜索缺少查询内容）", data={"section_count": 0})
 
-        endpoint = _web_search_endpoint()
-        if endpoint is None or not settings.llm_api_key:
+        direct_tavily = bool(settings.tavily_api_key)
+        endpoint = _TAVILY_SEARCH_ENDPOINT if direct_tavily else _web_search_endpoint()
+        api_key = settings.tavily_api_key if direct_tavily else settings.llm_api_key
+        if endpoint is None or not api_key:
             return ToolResult(
-                content="（内置联网搜索服务尚未配置，请在连接中配置可用的外部搜索工具）",
+                content="（内置联网搜索服务尚未配置，请配置独立 Tavily API Key、302.AI 或可用的外部搜索 MCP）",
                 data={"section_count": 0},
             )
 
@@ -581,9 +586,10 @@ class WebSearchTool(Tool):
         count = max(1, min(requested_count, 10))
         request_payload: dict[str, Any] = {
             "query": query,
-            "provider": _WEB_SEARCH_PROVIDER,
             "max_results": count,
         }
+        if not direct_tavily:
+            request_payload["provider"] = _WEB_SEARCH_PROVIDER
         requested_time_range = str(args.get("time_range") or "").strip().lower()
         if requested_time_range in {"day", "week", "month", "year"}:
             request_payload["time_range"] = requested_time_range
@@ -591,12 +597,12 @@ class WebSearchTool(Tool):
             request_payload["time_range"] = "week"
         category = str(args.get("category") or "").strip().lower()
         if category in {"general", "news"}:
-            request_payload["category"] = category
+            request_payload["topic" if direct_tavily else "category"] = category
         try:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_ms / 1000) as client:
                 response = await client.post(
                     endpoint,
-                    headers={"Authorization": f"Bearer {settings.llm_api_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                     json=request_payload,
                 )
                 response.raise_for_status()

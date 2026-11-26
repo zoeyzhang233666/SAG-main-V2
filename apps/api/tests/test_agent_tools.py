@@ -390,6 +390,7 @@ async def test_web_search_uses_302_endpoint_and_returns_traceable_sources(monkey
             requests.append({"url": url, **kwargs})
             return Response()
 
+    monkeypatch.setattr(settings, "tavily_api_key", None)
     monkeypatch.setattr(settings, "llm_base_url", "https://api.302ai.cn/v1")
     monkeypatch.setattr(settings, "llm_api_key", "sk-private-test")
     monkeypatch.setattr(builtin.httpx, "AsyncClient", lambda **_kwargs: Client())
@@ -423,9 +424,55 @@ async def test_web_search_uses_302_endpoint_and_returns_traceable_sources(monkey
 
 
 @pytest.mark.asyncio
+async def test_web_search_uses_independent_tavily_key_with_apihub(monkeypatch):
+    from sag_api.core.config import settings
+    from sag_api.tools import builtin
+
+    requests = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{"url": "https://example.com/news", "title": "News", "content": "Evidence"}]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **kwargs):
+            requests.append({"url": url, **kwargs})
+            return Response()
+
+    monkeypatch.setattr(settings, "llm_base_url", "https://apihub.chem-cloud.cn/v1")
+    monkeypatch.setattr(settings, "llm_api_key", "model-key")
+    monkeypatch.setattr(settings, "tavily_api_key", "search-key")
+    monkeypatch.setattr(builtin.httpx, "AsyncClient", lambda **_kwargs: Client())
+    assert WebSearchTool.configured()
+    result = await WebSearchTool().invoke(
+        {"query": "latest news", "category": "news", "time_range": "day"},
+        ToolContext(engine_manager=SimpleNamespace()),
+    )
+    assert requests[0]["url"] == "https://api.tavily.com/search"
+    assert requests[0]["headers"]["Authorization"] == "Bearer search-key"
+    assert requests[0]["json"] == {
+        "query": "latest news", "max_results": 6, "time_range": "day", "topic": "news",
+    }
+    assert result.data["section_count"] == 1
+    assert result.data["external_references"][0]["url"] == "https://example.com/news"
+    assert "search-key" not in result.content
+    assert "model-key" not in result.content
+
+
+@pytest.mark.asyncio
 async def test_web_search_is_unavailable_without_302_configuration(monkeypatch):
     from sag_api.core.config import settings
 
+    monkeypatch.setattr(settings, "tavily_api_key", None)
     monkeypatch.setattr(settings, "llm_base_url", "https://api.openai.com/v1")
     monkeypatch.setattr(settings, "llm_api_key", "sk-test")
 

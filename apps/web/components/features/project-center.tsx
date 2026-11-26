@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import {
   ArrowRight,
-  Bot,
   Boxes,
   Cable,
   DatabaseBackup,
@@ -30,9 +29,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const CAPABILITY_CARDS = [
-  { key: "agent", icon: Bot, href: "/chat", tone: "bg-primary/10 text-primary" },
   { key: "mcp", icon: Cable, href: "/connections", tone: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
-  { key: "web", icon: Globe2, href: "/chat", tone: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
+  { key: "web", icon: Globe2, href: "/chat?web=1", tone: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
   { key: "graph", icon: Orbit, href: "/knowledge", tone: "bg-violet-500/10 text-violet-600 dark:text-violet-400" },
 ] as const;
 
@@ -168,7 +166,7 @@ export function ProjectCenter() {
               <p className="mt-0.5 text-xs text-muted-foreground">{t("capabilitiesDescription")}</p>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {CAPABILITY_CARDS.map((item) => {
               const Icon = item.icon;
               return (

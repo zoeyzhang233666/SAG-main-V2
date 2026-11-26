@@ -224,6 +224,15 @@ export function ConversationPanel({
   const approvalBusy = pendingApproval?.resolving ?? false;
 
   React.useEffect(() => {
+    if (!active) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("web") !== "1") return;
+    setWebEnabled(true);
+    url.searchParams.delete("web");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+  }, [active, setWebEnabled]);
+
+  React.useEffect(() => {
     if (active) runtime.activate(sessionId);
     void runtime.ensureHistory(sessionId);
   }, [active, runtime, sessionId]);

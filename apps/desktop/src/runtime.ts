@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import path from "node:path";
 import {
   spawn,
@@ -12,6 +11,7 @@ import { app, utilityProcess, type UtilityProcess } from "electron";
 import log from "electron-log/main";
 
 import { desktopConfig } from "./config";
+import { isPortAvailable, resolveApiPort } from "./runtime-ports";
 
 interface RuntimeSecretFile {
   secretKey: string;
@@ -25,6 +25,7 @@ export interface ManagedRuntime {
 
 interface StartedProcess {
   stop(): void;
+  startupError(): Error | undefined;
 }
 
 function isValidSecretFile(value: unknown): value is RuntimeSecretFile {
@@ -51,17 +52,6 @@ function loadOrCreateSecret(userDataDir: string): string {
   return secretKey;
 }
 
-async function isPortAvailable(host: string, port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = createServer();
-    server.unref();
-    server.once("error", () => resolve(false));
-    server.listen({ host, port, exclusive: true }, () => {
-      server.close(() => resolve(true));
-    });
-  });
-}
-
 async function findAvailablePort(host: string, preferred: number): Promise<number> {
   for (let port = preferred; port < Math.min(65535, preferred + 100); port += 1) {
     if (await isPortAvailable(host, port)) return port;
@@ -69,12 +59,14 @@ async function findAvailablePort(host: string, preferred: number): Promise<numbe
   throw new Error(`No available local port found near ${preferred}`);
 }
 
-async function waitForHttp(url: string, timeoutMs: number): Promise<void> {
+async function waitForHttp(url: string, timeoutMs: number, startupError?: () => Error | undefined): Promise<void> {
   const startedAt = Date.now();
   let lastError: unknown;
   while (Date.now() - startedAt < timeoutMs) {
+    const failure = startupError?.();
+    if (failure) throw failure;
     try {
-      const response = await fetch(url, { cache: "no-store" });
+      const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(2000) });
       if (response.ok) return;
       lastError = new Error(`${url} returned ${response.status}`);
     } catch (error) {
@@ -115,7 +107,10 @@ function startNextRuntime(webRoot: string, port: number): StartedProcess {
     serviceName: "ChemClaw Knowledge Graph Web Runtime",
   });
   pipeUtilityLogs(child, "web");
+  let failure: Error | undefined;
+  child.once("exit", (code) => { failure = new Error(`前端进程提前退出 (exit code ${code})`); });
   return {
+    startupError: () => failure,
     stop: () => {
       child.kill();
     },
@@ -142,6 +137,7 @@ function startPythonRuntime(
   resourcesPath: string,
   userDataDir: string,
   webOrigin: string,
+  apiPort: number,
 ): StartedProcess {
   const executable = backendExecutable(resourcesPath);
   if (!existsSync(executable)) {
@@ -163,13 +159,22 @@ function startPythonRuntime(
       SAG_UPLOAD_DIR: "./.data/uploads",
       SAG_SAG_VECTOR_PROVIDER: "lancedb",
       SAG_DESKTOP_HOST: desktopConfig.apiHost,
-      SAG_DESKTOP_PORT: String(desktopConfig.apiPort),
+      SAG_DESKTOP_PORT: String(apiPort),
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
   pipeChildLogs(child, "api");
+  let failure: Error | undefined;
+  child.once("error", (error) => {
+    log.error("API process could not start", error);
+    failure = new Error(`内置后端无法启动 (${error.code ?? "spawn error"})`);
+  });
+  child.once("exit", (code, signal) => {
+    failure = new Error(`内置后端提前退出 (exit code ${code ?? "unknown"}, signal ${signal ?? "none"})`);
+  });
   return {
+    startupError: () => failure,
     stop: () => {
       child.kill();
     },
@@ -178,32 +183,34 @@ function startPythonRuntime(
 
 export async function startPackagedRuntime(): Promise<ManagedRuntime> {
   const host = desktopConfig.apiHost;
-  if (!(await isPortAvailable(host, desktopConfig.apiPort))) {
-    throw new Error(
-      `Local API port ${desktopConfig.apiPort} is already in use. `
-      + "Close the conflicting service or configure SAG_DESKTOP_API_PORT.",
-    );
-  }
   const webPort = await findAvailablePort(host, desktopConfig.preferredWebPort);
+  const apiPort = await resolveApiPort(host, desktopConfig.apiPort, webPort);
+  log.info(`Resolved API port ${apiPort}`);
+  log.info(`Resolved Web port ${webPort}`);
   const webHealthUrl = `http://${host}:${webPort}`;
   // Next.js standalone normalizes redirects to localhost. Use that as the UI
   // origin while keeping the actual listener restricted to 127.0.0.1.
   const webUrl = `http://localhost:${webPort}`;
-  const apiUrl = `http://${host}:${desktopConfig.apiPort}`;
+  const apiUrl = `http://${host}:${apiPort}`;
   const webRoot = path.join(process.resourcesPath, "web");
   const userDataDir = app.getPath("userData");
 
   const processes: StartedProcess[] = [];
   try {
-    processes.push(startNextRuntime(webRoot, webPort));
-    processes.push(startPythonRuntime(process.resourcesPath, userDataDir, webUrl));
+    const web = startNextRuntime(webRoot, webPort);
+    processes.push(web);
+    const api = startPythonRuntime(process.resourcesPath, userDataDir, webUrl, apiPort);
+    processes.push(api);
+    const startupError = () => api.startupError() ?? web.startupError();
     await Promise.all([
-      waitForHttp(webHealthUrl, desktopConfig.startupTimeoutMs),
+      waitForHttp(webHealthUrl, desktopConfig.startupTimeoutMs, startupError),
       waitForHttp(
         `${apiUrl}/api/v1/system/ready`,
         desktopConfig.startupTimeoutMs,
+        startupError,
       ),
     ]);
+    log.info("Desktop runtime ready");
   } catch (error) {
     for (const processHandle of [...processes].reverse()) processHandle.stop();
     throw error;

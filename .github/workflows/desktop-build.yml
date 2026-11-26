@@ -79,7 +79,7 @@ jobs:
         working-directory: apps/api
         run: |
           uv sync --frozen --no-dev
-          uv pip install --python .venv "pyinstaller==6.16.0"
+          uv pip install --python .venv "pyinstaller==6.16.0" "certifi>=2024.8.30"
       - name: Compile Electron
         working-directory: apps/desktop
         run: npm run build
@@ -120,6 +120,10 @@ jobs:
           trap 'hdiutil detach "$mount_dir"; rmdir "$mount_dir"' EXIT
           codesign --verify --deep --strict --verbose=2 "$mount_dir/ChemClaw Knowledge Graph.app"
           file "$mount_dir/ChemClaw Knowledge Graph.app/Contents/MacOS/ChemClaw Knowledge Graph" | grep -F arm64
+      - name: Install and launch Windows NSIS package
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: ./apps/desktop/scripts/smoke-installed-windows.ps1
       - name: Upload installer (not a public release)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

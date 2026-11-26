@@ -75,8 +75,8 @@ function showStartupError(error: unknown): void {
     `<meta charset="utf-8"><style>`
       + `body{margin:0;background:#09090b;color:#fafafa;font:14px system-ui;`
       + `display:grid;place-items:center;min-height:100vh}`
-      + `main{max-width:340px;text-align:center}p{color:#a1a1aa;line-height:1.5}`
-      + `</style><main><h2>ChemClaw 知识图谱启动失败</h2><p>${safeMessage}</p></main>`;
+      + `main{max-width:360px;text-align:center}p{color:#a1a1aa;line-height:1.5;user-select:text;overflow-wrap:anywhere}`
+      + `</style><main><h2>ChemClaw 知识图谱启动失败</h2><p>${safeMessage}</p><p>请复制上方错误信息。日志位于应用数据目录的 logs/main.log。</p></main>`;
   void splashWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
 
@@ -142,6 +142,7 @@ function createMainWindow(webUrl: string): BrowserWindow {
     backgroundColor: "#09090b",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
+      additionalArguments: runtime ? [`--sag-api-port=${new URL(runtime.apiUrl).port}`] : [],
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -157,6 +158,7 @@ function createMainWindow(webUrl: string): BrowserWindow {
   window.on("closed", () => {
     mainWindow = null;
   });
+  window.webContents.once("did-finish-load", () => log.info("Desktop main window loaded"));
   void window.loadURL(webUrl);
   return window;
 }

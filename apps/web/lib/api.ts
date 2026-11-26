@@ -43,6 +43,8 @@ import type {
 function resolveApiBase(): string {
   const configured = process.env.NEXT_PUBLIC_API_BASE;
   if (typeof window !== "undefined") {
+    const desktop = (window as Window & { sagDesktop?: { isDesktop?: boolean; apiBase?: string } }).sagDesktop;
+    if (desktop?.isDesktop && desktop.apiBase) return desktop.apiBase;
     const { protocol, hostname } = window.location;
     const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
     if (!isLocalHost) {

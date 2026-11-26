@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner";
 
 import { api, ApiError } from "@/lib/api";
-import type { Source, StructuredImportResult } from "@/lib/types";
+import type { BackgroundJob, Source, StructuredImportResult } from "@/lib/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -66,14 +66,42 @@ export function StructuredDataDialog({
   const [profile, setProfile] = React.useState<ExportProfile>("full");
   const [progress, setProgress] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
+  const [queued, setQueued] = React.useState(false);
   const [downloading, setDownloading] = React.useState("");
   const [result, setResult] = React.useState<StructuredImportResult | null>(null);
+  const [indexId, setIndexId] = React.useState<string | null>(null);
+  const [indexJob, setIndexJob] = React.useState<BackgroundJob | null>(null);
+
+  React.useEffect(() => {
+    if (!open || !indexId) return;
+    let active = true;
+    let timer: number;
+    async function refreshIndex(id: string) {
+      try {
+        const next = await api.getJob(id);
+        if (!active) return;
+        setIndexJob(next);
+        if (next.status !== "queued" && next.status !== "running") return;
+      } catch {
+        if (!active) return;
+      }
+      timer = window.setTimeout(() => void refreshIndex(id), 2000);
+    }
+    void refreshIndex(indexId);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [indexId, open]);
 
   async function runImport(selectedFile: File) {
     setFile(selectedFile);
     setBusy(true);
+    setQueued(false);
     setProgress(1);
     setResult(null);
+    setIndexId(null);
+    setIndexJob(null);
     try {
       let job = await api.importStructuredData(
         source.id,
@@ -83,11 +111,12 @@ export function StructuredDataDialog({
       );
       setProgress(Math.max(20, Math.round(20 + job.progress * 80)));
       while (job.status === "queued" || job.status === "running") {
+        setQueued(job.status === "queued");
         await new Promise((resolve) => window.setTimeout(resolve, 700));
         job = await api.getJob(job.id);
         setProgress(Math.max(20, Math.round(20 + job.progress * 80)));
       }
-      if (job.status === "failed") {
+      if (job.status !== "succeeded") {
         throw new ApiError(422, "structured_import_failed", job.error || t("importFailed"));
       }
       const imported = job.payload.result as StructuredImportResult | undefined;
@@ -96,6 +125,7 @@ export function StructuredDataDialog({
       }
       setProgress(100);
       setResult(imported);
+      if (typeof job.payload.vector_job_id === "string") setIndexId(job.payload.vector_job_id);
       await onImported?.();
       toast.success(t("importSuccess", { count: imported.counts.documents }));
     } catch (error) {
@@ -195,7 +225,7 @@ export function StructuredDataDialog({
                 </SelectContent>
               </Select>
               <div className="flex min-w-28 items-center justify-center rounded-md border bg-muted/35 px-3 text-xs text-muted-foreground">
-                {busy ? t("importing") : t("autoStart")}
+                {busy ? t(queued ? "importQueued" : "importing") : t("autoStart")}
               </div>
             </div>
             {busy && <Progress value={progress} className="mt-3 h-1.5" />}
@@ -258,6 +288,19 @@ export function StructuredDataDialog({
               <AlertTitle>{t("resultTitle")}</AlertTitle>
               <AlertDescription>
                 {t("resultCounts", result.counts)}
+                {indexId && (
+                  <span className="mt-1 block">
+                    {indexJob?.status === "failed"
+                      ? t("indexFailed", { error: indexJob.error || t("importFailed") })
+                      : indexJob?.status === "succeeded"
+                        ? t("indexReady")
+                        : indexJob?.status === "paused"
+                          ? t("indexPaused")
+                          : indexJob?.status === "running"
+                            ? t("indexRunning")
+                            : t("indexQueued")}
+                  </span>
+                )}
                 {result.warnings.map((warning) => (
                   <span key={warning} className="mt-1 flex items-start gap-1.5 text-amber-700 dark:text-amber-300">
                     <TriangleAlert className="mt-0.5 size-3 shrink-0" />

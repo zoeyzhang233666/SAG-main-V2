@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import bindparam, delete, exists, or_, select, text
+from sqlalchemy import bindparam, delete, or_, select, text
 
 from sag_api.core.logging import get_logger
 
@@ -46,6 +46,9 @@ async def _delete_vector_ids(client: Any, index: str, ids: tuple[str, ...]) -> N
             await table.delete(f"id IN ({values})")
         return
 
+    index_exists = getattr(client, "index_exists", None)
+    if callable(index_exists) and not await index_exists(index):
+        return
     raw_client = getattr(client, "client", client)
     delete_by_query = getattr(raw_client, "delete_by_query", None)
     if callable(delete_by_query):
@@ -80,14 +83,12 @@ async def _delete_vectors(records: DeletedDocumentRecords) -> None:
     groups = (
         ("source_chunks", records.chunk_ids),
         ("event_vectors", records.event_ids),
+        ("event_vectors_wide", records.event_ids),
         ("event_entity_vectors", records.relation_ids),
         ("entity_vectors", records.entity_ids),
     )
     for index, ids in groups:
-        try:
-            await _delete_vector_ids(client, index, ids)
-        except Exception as error:  # noqa: BLE001 - relational data remains authoritative
-            log.warning("向量派生数据清理失败 index=%s count=%d: %s", index, len(ids), error)
+        await _delete_vector_ids(client, index, ids)
 
 
 async def delete_document_records(
@@ -100,6 +101,7 @@ async def delete_document_records(
         Article,
         ArticleSection,
         Entity,
+        EntityType,
         EventEntity,
         EventEntityEmbedding,
         SourceChunk,
@@ -108,103 +110,66 @@ async def delete_document_records(
 
     session_factory = get_session_factory()
     async with session_factory() as session:
-        article_ids = tuple(
-            (
-                await session.scalars(
-                    select(Article.id).where(
-                        Article.source_config_id == source_config_id,
-                        or_(
-                            Article.id == document_source_id,
-                            Article.source_id == document_source_id,
-                        ),
-                    )
-                )
-            ).all()
+        articles = select(Article.id).where(
+            Article.source_config_id == source_config_id,
+            or_(Article.id == document_source_id, Article.source_id == document_source_id),
         )
-        source_ids = tuple({document_source_id, *article_ids})
-        chunk_conditions = [SourceChunk.source_id.in_(source_ids)]
-        if article_ids:
-            chunk_conditions.append(SourceChunk.article_id.in_(article_ids))
-        chunk_ids = tuple(
-            (
-                await session.scalars(
-                    select(SourceChunk.id).where(
-                        SourceChunk.source_config_id == source_config_id,
-                        or_(*chunk_conditions),
-                    )
-                )
-            ).all()
+        chunks = select(SourceChunk.id).where(
+            SourceChunk.source_config_id == source_config_id,
+            or_(
+                SourceChunk.source_id == document_source_id,
+                SourceChunk.source_id.in_(articles),
+                SourceChunk.article_id.in_(articles),
+            ),
         )
+        events = select(SourceEvent.id).where(
+            SourceEvent.source_config_id == source_config_id,
+            or_(
+                SourceEvent.source_id == document_source_id,
+                SourceEvent.source_id.in_(articles),
+                SourceEvent.article_id.in_(articles),
+                SourceEvent.chunk_id.in_(chunks),
+            ),
+        )
+        target_relations = select(EventEntity.id).where(EventEntity.event_id.in_(events))
+        related_entities = select(EventEntity.entity_id).where(EventEntity.event_id.in_(events))
+        remaining_reference = select(EventEntity.id).where(
+            EventEntity.entity_id == Entity.id, EventEntity.event_id.not_in(events)
+        ).exists()
+        orphans = select(Entity.id).where(Entity.id.in_(related_entities), ~remaining_reference)
 
-        event_conditions = [SourceEvent.source_id.in_(source_ids)]
-        if article_ids:
-            event_conditions.append(SourceEvent.article_id.in_(article_ids))
-        if chunk_ids:
-            event_conditions.append(SourceEvent.chunk_id.in_(chunk_ids))
-        event_ids = tuple(
-            (
-                await session.scalars(
-                    select(SourceEvent.id).where(
-                        SourceEvent.source_config_id == source_config_id,
-                        or_(*event_conditions),
-                    )
-                )
-            ).all()
+        records = DeletedDocumentRecords(
+            chunk_ids=tuple((await session.scalars(chunks)).all()),
+            event_ids=tuple((await session.scalars(events)).all()),
+            relation_ids=tuple((await session.scalars(target_relations)).all()),
+            entity_ids=tuple((await session.scalars(orphans)).all()),
         )
-
-        relation_rows = (
-            (
-                await session.execute(
-                    select(EventEntity.id, EventEntity.entity_id).where(
-                        EventEntity.event_id.in_(event_ids)
-                    )
-                )
-            ).all()
-            if event_ids
-            else []
-        )
-        relation_ids = tuple(row.id for row in relation_rows)
-        related_entity_ids = tuple({row.entity_id for row in relation_rows})
-
-        if relation_ids:
+        # Keep the SQL IDs intact until all vector deletes succeed. A restart or
+        # partial vector failure can replay the same predicates without losing IDs.
+        await _delete_vectors(records)
+        for batch in _batches(records.relation_ids):
             await session.execute(
-                delete(EventEntityEmbedding).where(EventEntityEmbedding.id.in_(relation_ids))
+                delete(EventEntityEmbedding).where(EventEntityEmbedding.id.in_(batch))
             )
-            await session.execute(delete(EventEntity).where(EventEntity.id.in_(relation_ids)))
-        if event_ids:
-            await session.execute(delete(SourceEvent).where(SourceEvent.id.in_(event_ids)))
-
-        orphan_entity_ids: tuple[str, ...] = ()
-        if related_entity_ids:
-            orphan_entity_ids = tuple(
-                (
-                    await session.scalars(
-                        select(Entity.id).where(
-                            Entity.id.in_(related_entity_ids),
-                            ~exists(
-                                select(EventEntity.id).where(EventEntity.entity_id == Entity.id)
-                            ),
-                        )
-                    )
-                ).all()
-            )
-            if orphan_entity_ids:
-                await session.execute(delete(Entity).where(Entity.id.in_(orphan_entity_ids)))
-
-        if chunk_ids:
-            await session.execute(delete(SourceChunk).where(SourceChunk.id.in_(chunk_ids)))
-        if article_ids:
+            await session.execute(delete(EventEntity).where(EventEntity.id.in_(batch)))
+        for batch in _batches(records.event_ids):
+            await session.execute(delete(SourceEvent).where(SourceEvent.id.in_(batch)))
+        for batch in _batches(records.entity_ids):
             await session.execute(
-                delete(ArticleSection).where(ArticleSection.article_id.in_(article_ids))
+                delete(Entity).where(
+                    Entity.id.in_(batch),
+                    ~select(EventEntity.id).where(EventEntity.entity_id == Entity.id).exists(),
+                )
             )
-            await session.execute(delete(Article).where(Article.id.in_(article_ids)))
+        for batch in _batches(records.chunk_ids):
+            await session.execute(delete(SourceChunk).where(SourceChunk.id.in_(batch)))
+        await session.execute(delete(ArticleSection).where(ArticleSection.article_id.in_(articles)))
+        await session.execute(
+            delete(EntityType).where(
+                EntityType.article_id.in_(articles),
+                ~select(Entity.id).where(Entity.entity_type_id == EntityType.id).exists(),
+            )
+        )
+        await session.execute(delete(Article).where(Article.id.in_(articles)))
         await session.commit()
-
-    records = DeletedDocumentRecords(
-        chunk_ids=chunk_ids,
-        event_ids=event_ids,
-        relation_ids=relation_ids,
-        entity_ids=orphan_entity_ids,
-    )
-    await _delete_vectors(records)
-    return records
+        return records

@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,8 +18,9 @@ from sag_api.core.config import settings
 from sag_api.core.db import SessionLocal
 from sag_api.core.errors import NotFoundError
 from sag_api.core.logging import get_logger
+from sag_api.db.base import new_id
 from sag_api.db.models import Document, Job, Source
-from sag_api.enums import DocumentStatus, JobType
+from sag_api.enums import DocumentStatus, JobStatus, JobType
 from sag_api.jobs.control import JobPaused
 from sag_api.parsing import prepare_document
 from sag_api.sag import EngineManager
@@ -35,6 +38,10 @@ async def process_document(
     document = await session.get(Document, job.document_id) if job.document_id else None
     if document is None:
         raise NotFoundError("文档不存在")
+    if document.status in {DocumentStatus.DELETING, DocumentStatus.DELETE_FAILED}:
+        raise JobPaused()
+    if document.content_type == "application/x-chemclaw-structured":
+        raise JobPaused()
     source = await session.get(Source, document.source_id)
     if source is None:
         raise NotFoundError("信源不存在")
@@ -44,13 +51,25 @@ async def process_document(
         await session.refresh(job, attribute_names=["payload"])
         return dict(job.payload or {})
 
+    async def set_processing_status(status: DocumentStatus, *, error: str | None = None) -> None:
+        result = await session.execute(
+            update(Document)
+            .where(
+                Document.id == document.id,
+                Document.status.not_in([DocumentStatus.DELETING, DocumentStatus.DELETE_FAILED]),
+            )
+            .values(status=status, error=error)
+        )
+        if result.rowcount == 0:
+            raise JobPaused()
+
     async def on_stage(stage: str) -> None:
         if stage == "loading":
-            document.status = DocumentStatus.LOADING
+            await set_processing_status(DocumentStatus.LOADING)
             document.progress = max(document.progress, 5)
             job.progress = document.progress / 100
         elif stage == "extracting":
-            document.status = DocumentStatus.EXTRACTING
+            await set_processing_status(DocumentStatus.EXTRACTING)
             completed = len(checkpoint.processed_chunk_ids)
             total = len(checkpoint.chunk_ids)
             document.progress = 20 + round(80 * completed / total) if total else 20
@@ -58,7 +77,7 @@ async def process_document(
         await session.commit()
 
     async def on_parser_state(state: dict) -> None:
-        document.status = DocumentStatus.LOADING
+        await set_processing_status(DocumentStatus.LOADING)
         document.progress = max(document.progress, 10)
         job.progress = document.progress / 100
         job.payload = {**(await refresh_payload()), "document_parser": state}
@@ -74,8 +93,10 @@ async def process_document(
         document.token_usage = value.token_usage
         total = len(value.chunk_ids)
         completed = len(value.processed_chunk_ids)
-        document.progress = 20 + round(80 * completed / total) if total else 20
-        job.progress = document.progress / 100
+        progress = 20 + round(80 * completed / total) if total else 20
+        if not (await refresh_payload()).get("pause_requested"):
+            document.progress = progress
+        job.progress = progress / 100
         await session.commit()
 
     async def should_pause() -> bool:
@@ -115,34 +136,27 @@ async def process_document(
             max_concurrency=settings.document_extract_concurrency,
         )
         if outcome.paused:
-            document.status = DocumentStatus.PAUSED
-            document.error = None
+            await set_processing_status(DocumentStatus.PAUSED)
             await session.commit()
             raise JobPaused()
     except JobPaused:
         raise
     except Exception as e:  # noqa: BLE001 - 记录到文档后再上抛给 worker
-        document.status = DocumentStatus.FAILED
-        document.error = getattr(e, "message", None) or str(e)
+        await set_processing_status(DocumentStatus.FAILED, error=getattr(e, "message", None) or str(e))
         await session.commit()
         raise
 
-    document.status = DocumentStatus.READY
+    await set_processing_status(DocumentStatus.READY)
     document.chunk_count = outcome.chunk_count
     document.event_count = outcome.event_count
     document.sag_source_id = outcome.source_id
     document.progress = 100
     document.token_usage = outcome.token_usage
     document.error = None
-    # 信源聚合计数用原子 SQL 更新，避免并发读改写丢失
-    await session.execute(
-        update(Source)
-        .where(Source.id == source.id)
-        .values(
-            chunk_count=Source.chunk_count + outcome.chunk_count,
-            event_count=Source.event_count + outcome.event_count,
-        )
-    )
+    from sag_api.services.document_service import refresh_source_document_counts
+
+    await session.flush()
+    await refresh_source_document_counts(session, source.id)
     await session.commit()
     log.info(
         "文档处理完成 doc=%s parser=%s cached=%s chunks=%d events=%d tokens=%d",
@@ -225,14 +239,24 @@ async def index_universe(
     await session.commit()
 
 
+async def _pause_requested(job_id: str) -> bool:
+    async with SessionLocal() as control_session:
+        current_job = await control_session.get(Job, job_id)
+        if current_job is None:
+            return True
+        return bool((current_job.payload or {}).get("pause_requested"))
+
+
 async def structured_import(
     session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None
 ) -> None:
     """把已流式落盘的结构化项目批量写入关系图；向量索引另行排队。"""
     from pathlib import Path
 
-    from sag_api.enums import JobStatus
     from sag_api.services.structured_data_service import import_structured_data
+
+    if await _pause_requested(job.id):
+        raise JobPaused()
 
     payload = dict(job.payload or {})
     path = Path(str(payload.get("path") or ""))
@@ -240,10 +264,12 @@ async def structured_import(
         raise NotFoundError("待导入的结构化数据文件不存在")
 
     job.progress = max(job.progress, 0.08)
-    job.payload = {**payload, "stage": "parsing"}
+    job.payload = {**payload, "stage": "parsing", "batch_id": job.id}
     await session.commit()
 
     async def on_progress(value: float) -> None:
+        if await _pause_requested(job.id):
+            raise JobPaused()
         job.progress = max(job.progress, min(value, 0.88))
         job.payload = {**(job.payload or {}), "stage": "writing"}
         await session.commit()
@@ -252,17 +278,21 @@ async def structured_import(
         session,
         str(job.source_id),
         filename=str(payload.get("filename") or path.name),
-        content=path.read_bytes(),
+        content=await asyncio.to_thread(path.read_bytes),
         requested_format=str(payload.get("format") or "auto"),
         engine_manager=engine_manager,
         job_queue=None,
         index_vectors=False,
         on_progress=on_progress,
+        import_job_id=job.id,
     )
+    if await _pause_requested(job.id):
+        raise JobPaused()
     index_plan = result.pop("_index_plan", None)
     vector_job_id = None
     if index_plan and job_queue is not None:
         vector_job = Job(
+            id=new_id(),
             type=JobType.STRUCTURED_INDEX,
             status=JobStatus.QUEUED,
             source_id=job.source_id,
@@ -270,35 +300,36 @@ async def structured_import(
             payload={**index_plan, "stage": "queued"},
         )
         session.add(vector_job)
-        await session.commit()
-        await session.refresh(vector_job)
         vector_job_id = vector_job.id
-        await job_queue.enqueue(vector_job.id)
-        result["warnings"] = [
-            *(result.get("warnings") or []),
-            "项目内容已可用，语义索引正在后台完成。",
-        ]
-
-    job.progress = 0.98
-    job.payload = {
-        "filename": payload.get("filename"),
-        "size_bytes": payload.get("size_bytes"),
-        "stage": "completed",
-        "result": result,
-        "vector_job_id": vector_job_id,
-    }
-    await session.commit()
-    path.unlink(missing_ok=True)
 
     if job_queue is not None:
         from sag_api.services.universe_service import schedule_universe_refresh
 
+        # This helper commits. Keep the vector job and the completed import in
+        # the same commit so a restart cannot import the file a second time.
+        job.status = JobStatus.SUCCEEDED
+        job.progress = 1.0
+        job.finished_at = datetime.now(UTC)
+        job.payload = {
+            "filename": payload.get("filename"),
+            "size_bytes": payload.get("size_bytes"),
+            "stage": "completed",
+            "result": result,
+            "vector_job_id": vector_job_id,
+        }
         await schedule_universe_refresh(
-            session,
-            job_queue,
-            source_id=str(job.source_id),
-            reason="structured_import",
+            session, job_queue, source_id=str(job.source_id), reason="structured_import",
         )
+        if vector_job_id is not None:
+            await job_queue.enqueue(vector_job_id)
+    else:
+        job.payload = {**payload, "stage": "completed", "result": result}
+        await session.commit()
+
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        log.warning("已完成导入，但暂存文件清理失败 job=%s", job.id)
 
 
 async def structured_index(
@@ -307,23 +338,46 @@ async def structured_index(
     """后台补齐结构化项目的向量索引，不重复切片或调用实体抽取。"""
     from sag_api.services.structured_data_service import index_structured_data
 
+    if await _pause_requested(job.id):
+        raise JobPaused()
+
     source = await session.get(Source, job.source_id) if job.source_id else None
     if source is None:
         raise NotFoundError("项目不存在")
     payload = dict(job.payload or {})
-    job.progress = 0.1
+    article_ids = [str(value) for value in payload.get("article_ids") or []]
+    job.progress = max(job.progress, 0.1)
     job.payload = {**payload, "stage": "indexing"}
     await session.commit()
+
+    async def on_progress(fraction: float) -> None:
+        if await _pause_requested(job.id):
+            raise JobPaused()
+        job.progress = max(job.progress, 0.1 + 0.9 * fraction)
+        await session.commit()
+
     await index_structured_data(
         source=source,
-        article_ids=[str(value) for value in payload.get("article_ids") or []],
-        event_ids=[str(value) for value in payload.get("event_ids") or []],
-        chunk_ids=[str(value) for value in payload.get("chunk_ids") or []],
+        article_ids=article_ids,
         engine_manager=engine_manager,
+        on_progress=on_progress,
     )
-    job.progress = 1.0
+    if await _pause_requested(job.id):
+        raise JobPaused()
     job.payload = {**payload, "stage": "completed"}
-    await session.commit()
+
+
+async def delete_document_task(
+    session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None
+) -> None:
+    from sag_api.services.document_service import execute_document_delete
+
+    await execute_document_delete(
+        session,
+        job,
+        engine_manager=engine_manager,
+        job_queue=job_queue,
+    )
 
 
 TASK_HANDLERS: dict[JobType, TaskHandler] = {
@@ -332,4 +386,5 @@ TASK_HANDLERS: dict[JobType, TaskHandler] = {
     JobType.INDEX_UNIVERSE: index_universe,
     JobType.STRUCTURED_IMPORT: structured_import,
     JobType.STRUCTURED_INDEX: structured_index,
+    JobType.DELETE_DOCUMENT: delete_document_task,
 }

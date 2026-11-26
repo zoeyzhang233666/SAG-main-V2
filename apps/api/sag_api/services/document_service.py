@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sag_api.core.config import settings
 from sag_api.core.errors import ConflictError, NotFoundError
 from sag_api.db.base import new_id
 from sag_api.db.models import Document, Job, Source
@@ -118,12 +120,58 @@ async def ingest_content(
     return document
 
 
+async def _lock_document_for_processing(
+    session: AsyncSession, source: Source, document_id: str,
+) -> Document:
+    # Serialize status changes against DELETE on both SQLite and PostgreSQL.
+    result = await session.execute(
+        update(Document).where(
+            Document.id == document_id,
+            Document.source_id == source.id,
+            Document.status.not_in([DocumentStatus.DELETING, DocumentStatus.DELETE_FAILED]),
+        ).values(updated_at=Document.updated_at)
+    )
+    document = await get_document(session, source, document_id)
+    if result.rowcount == 0:
+        raise ConflictError("请先完成文档删除")
+    return document
+
+
 async def reprocess_document(
     session: AsyncSession, source: Source, document_id: str, *, job_queue: JobQueue
 ) -> Job:
-    document = await get_document(session, source, document_id)
+    document = await _lock_document_for_processing(session, source, document_id)
+    if document.content_type == "application/x-chemclaw-structured":
+        if not document.sag_source_id:
+            raise ConflictError("结构化文档没有可索引的图谱记录")
+        if not settings.effective_embedding_api_key:
+            raise ConflictError("配置 Embedding 后可重建语义索引")
+        active = await session.scalars(
+            select(Job).where(
+                Job.source_id == source.id,
+                Job.type == JobType.STRUCTURED_INDEX,
+                Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+            )
+        )
+        for index_job in active:
+            if document.sag_source_id in (index_job.payload or {}).get("article_ids", []):
+                return index_job
+        job = Job(
+            type=JobType.STRUCTURED_INDEX,
+            source_id=source.id,
+            document_id=document.id,
+            status=JobStatus.QUEUED,
+            payload={"article_ids": [document.sag_source_id], "stage": "queued"},
+        )
+        session.add(job)
+        await session.commit()
+        await job_queue.enqueue(job.id)
+        return job
+
     latest = await session.scalar(
-        select(Job).where(Job.document_id == document.id).order_by(Job.created_at.desc())
+        select(Job).where(
+            Job.document_id == document.id, Job.type == JobType.PROCESS_DOCUMENT,
+        ).order_by(Job.created_at.desc())
     )
     if latest is not None and latest.status in {
         JobStatus.QUEUED,
@@ -157,11 +205,12 @@ async def reprocess_document(
 
 async def pause_document(session: AsyncSession, source: Source, document_id: str) -> Job:
     """协作式暂停：已开始的分块跑完并保存断点，不再领取新分块。"""
-    document = await get_document(session, source, document_id)
+    document = await _lock_document_for_processing(session, source, document_id)
     job = await session.scalar(
         select(Job)
         .where(
             Job.document_id == document.id,
+            Job.type == JobType.PROCESS_DOCUMENT,
             Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
         )
         .order_by(Job.created_at.desc())
@@ -199,10 +248,14 @@ async def resume_document(
     job_queue: JobQueue,
 ) -> Job:
     """把暂停任务原样重新入队，处理器会跳过断点中已完成的分块。"""
-    document = await get_document(session, source, document_id)
+    document = await _lock_document_for_processing(session, source, document_id)
     job = await session.scalar(
         select(Job)
-        .where(Job.document_id == document.id, Job.status == JobStatus.PAUSED)
+        .where(
+            Job.document_id == document.id,
+            Job.type == JobType.PROCESS_DOCUMENT,
+            Job.status == JobStatus.PAUSED,
+        )
         .order_by(Job.created_at.desc())
         .limit(1)
     )
@@ -226,71 +279,151 @@ async def resume_document(
     return job
 
 
+async def refresh_source_document_counts(session: AsyncSession, source_id: str) -> None:
+    counts = select(
+        func.count(Document.id),
+        func.coalesce(func.sum(Document.chunk_count), 0),
+        func.coalesce(func.sum(Document.event_count), 0),
+    ).where(Document.source_id == source_id)
+    document_count, chunk_count, event_count = (await session.execute(counts)).one()
+    await session.execute(
+        update(Source).where(Source.id == source_id).values(
+            document_count=document_count, chunk_count=chunk_count, event_count=event_count,
+        )
+    )
+
+
 async def delete_document(
     session: AsyncSession,
     source: Source,
     document_id: str,
     *,
-    engine_manager: EngineManager,
-    job_queue: JobQueue | None = None,
-) -> None:
-    document = await get_document(session, source, document_id)
-    path = document.storage_path
-    sag_source_id = document.sag_source_id
-
-    active_jobs = list(
-        (
-            await session.scalars(
-                select(Job).where(
-                    Job.document_id == document.id,
-                    Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
-                )
-            )
-        ).all()
+    job_queue: JobQueue,
+) -> Job:
+    """Persist the deletion and fence its writers before returning to the UI."""
+    source_id = source.id
+    claim = await session.execute(
+        update(Document)
+        .where(
+            Document.id == document_id,
+            Document.source_id == source_id,
+            Document.status != DocumentStatus.DELETING,
+        )
+        .values(status=DocumentStatus.DELETING, progress=0, error=None)
     )
-    for job in active_jobs:
-        job.payload = {**(job.payload or {}), "pause_requested": True}
-        if job.status == JobStatus.QUEUED:
-            job.status = JobStatus.PAUSED
-    if active_jobs:
-        await session.commit()
-
-    if sag_source_id:
-        await engine_manager.delete_document_data(
-            source.sag_source_config_id,
-            sag_source_id,
-            source=source,
+    if claim.rowcount == 0:
+        existing = await session.scalar(
+            select(Job).where(
+                Job.source_id == source_id,
+                Job.type == JobType.DELETE_DOCUMENT,
+                Job.payload["target_document_id"].as_string() == document_id,
+            ).order_by(Job.created_at.desc(), Job.id.desc()).limit(1)
         )
+        if existing is None:
+            raise NotFoundError("文档不存在")
+        return existing
 
-    await session.delete(document)
-    await session.flush()
-    document_count, chunk_count, event_count = (
-        await session.execute(
-            select(
-                func.count(Document.id),
-                func.coalesce(func.sum(Document.chunk_count), 0),
-                func.coalesce(func.sum(Document.event_count), 0),
-            ).where(Document.source_id == source.id)
+    document = await get_document(session, source, document_id)
+    candidates = await session.scalars(
+        select(Job).where(
+            Job.source_id == source_id,
+            Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+            Job.type.in_([JobType.PROCESS_DOCUMENT, JobType.STRUCTURED_INDEX]),
         )
-    ).one()
-    source.document_count = int(document_count)
-    source.chunk_count = int(chunk_count)
-    source.event_count = int(event_count)
+    )
+    cancel_index_ids = []
+    for writer in candidates:
+        payload = dict(writer.payload or {})
+        related_index = (
+            writer.type == JobType.STRUCTURED_INDEX
+            and bool(document.sag_source_id)
+            and payload.get("article_ids") == [document.sag_source_id]
+        )
+        if writer.document_id != document.id and not related_index:
+            continue
+        writer.payload = {**payload, "pause_requested": True}
+        if writer.status == JobStatus.QUEUED:
+            writer.status = JobStatus.PAUSED
+        elif related_index:
+            cancel_index_ids.append(writer.id)
+
+    job = Job(
+        type=JobType.DELETE_DOCUMENT,
+        source_id=source_id,
+        document_id=document_id,
+        status=JobStatus.QUEUED,
+        payload={"target_document_id": document_id, "stage": "queued"},
+    )
+    session.add(job)
     await session.commit()
-    if path:
-        from sag_api.parsing.service import parsed_sidecar_paths
 
-        for candidate in [path, *parsed_sidecar_paths(path)]:
-            try:
-                if os.path.exists(candidate):
-                    os.remove(candidate)
-            except OSError:
-                pass
+    for job_id in cancel_index_ids:
+        job_queue.cancel_running(job_id)
+    await job_queue.enqueue(job.id)
+    return job
+
+
+async def execute_document_delete(
+    session: AsyncSession,
+    job: Job,
+    *,
+    engine_manager: EngineManager,
+    job_queue: JobQueue,
+) -> None:
+    """Keep the document and its cleanup inputs until all stores are reconciled."""
+    from sag_api.parsing.service import parsed_sidecar_paths
     from sag_api.services.universe_service import schedule_universe_refresh
 
+    document_id = job.payload["target_document_id"]
+    document = await session.get(Document, document_id)
+    if document is None:
+        return
+    source = await session.get(Source, document.source_id)
+    if source is None:
+        raise NotFoundError("信源不存在")
+
+    # Processing may still be finishing its current chunk. Engine maintenance
+    # drains those writers before the callback reloads their last checkpoint.
+    if job.payload.get("stage") != "removing_record":
+        job.payload = {**job.payload, "stage": "cleaning_graph"}
+        job.progress = 0.2
+        document.progress = 20
+        await session.commit()
+
+        async def current_article_id() -> str | None:
+            await session.refresh(document, attribute_names=["sag_source_id"])
+            return document.sag_source_id
+
+        await engine_manager.delete_document_data(
+            source.sag_source_config_id, current_article_id, source=source,
+        )
+        job.payload = {**job.payload, "stage": "removing_record"}
+        job.progress = 0.8
+        document.progress = 80
+        await session.commit()
+
+    # Commit the 3D invalidation before the final commit deletes the document.
+    # On restart an unfinished job can safely request the refresh again.
     await schedule_universe_refresh(
-        session,
-        job_queue,
-        source_id=source.id,
-        reason="document_deleted",
+        session, job_queue, source_id=source.id, reason="document_delete",
     )
+
+    # Serialize the final update for the source, including imports and other deletes.
+    await session.execute(update(Source).where(Source.id == source.id).values(id=Source.id))
+    if document.storage_path:
+        shared = await session.scalar(
+            select(Document.id).where(
+                Document.storage_path == document.storage_path, Document.id != document_id,
+            ).limit(1)
+        )
+        path = Path(document.storage_path)
+        if shared is None and path.resolve().is_relative_to(Path(settings.upload_dir).resolve()):
+            for candidate in [path, *map(Path, parsed_sidecar_paths(str(path)))]:
+                candidate.unlink(missing_ok=True)
+
+    job.document_id = None
+    await session.flush()
+    await session.delete(document)
+    await session.flush()
+    await refresh_source_document_counts(session, source.id)
+    # The worker commits success with the record and aggregate changes.

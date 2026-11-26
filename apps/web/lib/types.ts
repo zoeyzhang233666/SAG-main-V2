@@ -44,6 +44,8 @@ export type DocumentStatus =
   | "loading"
   | "extracting"
   | "paused"
+  | "deleting"
+  | "delete_failed"
   | "ready"
   | "failed";
 
@@ -695,7 +697,7 @@ export interface UniverseTimelineSlice {
 export interface BackgroundJob {
   id: string;
   type: string;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: "queued" | "running" | "paused" | "succeeded" | "failed";
   source_id: string | null;
   document_id: string | null;
   progress: number;

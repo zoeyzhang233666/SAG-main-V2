@@ -53,10 +53,21 @@ class InProcessAsyncQueue(JobQueue):
         self._workers: list[asyncio.Task] = []
         self._retry_tasks: set[asyncio.Task] = set()
         self._universe_user_locks: dict[str, asyncio.Lock] = {}
+        self._running_jobs: dict[str, asyncio.Task] = {}
+        self._cancel_requested: set[str] = set()
         self._started = False
 
     async def enqueue(self, job_id: str) -> None:
         await self._queue.put(job_id)
+
+    def cancel_running(self, job_id: str) -> bool:
+        task = self._running_jobs.get(job_id)
+        if task is None or task.done() or task.cancelling():
+            return False
+        self._cancel_requested.add(job_id)
+        task.cancel()
+        log.info("已请求取消运行中任务 job=%s", job_id)
+        return True
 
     def _schedule_retry(self, job_id: str, delay: float) -> None:
         """退避后重新入队（不阻塞 worker）。"""
@@ -108,7 +119,8 @@ class InProcessAsyncQueue(JobQueue):
         self._started = False
 
     async def _recover(self) -> None:
-        from sag_api.db.models import Job
+        from sag_api.db.models import Document, Job
+        from sag_api.enums import DocumentStatus
 
         rows = []
         for attempt in range(_RECOVERY_LOCK_RETRIES):
@@ -122,8 +134,30 @@ class InProcessAsyncQueue(JobQueue):
                         )
                     ).scalars().all()
                     for job in rows:
-                        if job.status == JobStatus.RUNNING:
+                        payload = job.payload or {}
+                        if payload.get("pause_requested"):
+                            job.status = JobStatus.PAUSED
+                        elif (
+                            job.type == JobType.STRUCTURED_IMPORT
+                            and payload.get("stage") == "writing"
+                            and not payload.get("batch_id")
+                        ):
+                            # Older imports had no stable IDs across retries.
+                            job.status = JobStatus.FAILED
+                            job.error = "旧版导入在写入时中断，请检查已入库文档后再重试"
+                            job.finished_at = _now()
+                        elif job.status == JobStatus.RUNNING:
                             job.status = JobStatus.QUEUED
+                    # Older builds allowed ordinary reprocessing of imported articles.
+                    # Their graph is already durable and must never be extracted again.
+                    await session.execute(
+                        update(Document).where(
+                            Document.content_type == "application/x-chemclaw-structured",
+                            Document.sag_source_id.is_not(None),
+                            Document.status.in_([DocumentStatus.PENDING, DocumentStatus.PAUSED]),
+                            Document.progress == 0,
+                        ).values(status=DocumentStatus.READY, progress=100, error=None)
+                    )
                     await session.commit()
                 break
             except OperationalError as error:
@@ -131,18 +165,22 @@ class InProcessAsyncQueue(JobQueue):
                 if not locked or attempt == _RECOVERY_LOCK_RETRIES - 1:
                     raise
                 await asyncio.sleep(0.08 * (2**attempt))
-        for job in rows:
-            await self._queue.put(job.id)
+        for job in sorted(rows, key=lambda job: job.type != JobType.DELETE_DOCUMENT):
+            if job.status == JobStatus.QUEUED:
+                await self._queue.put(job.id)
         if rows:
             log.info("恢复 %d 个未完成任务", len(rows))
 
     async def _worker_loop(self, idx: int) -> None:
         while True:
             job_id = await self._queue.get()
+            job_task = asyncio.create_task(self._run(job_id), name=f"sag-job-{job_id}")
             try:
-                await self._run(job_id)
+                await job_task
             except asyncio.CancelledError:
-                raise
+                worker = asyncio.current_task()
+                if worker is not None and worker.cancelling():
+                    raise
             except Exception:  # noqa: BLE001
                 log.exception("worker#%d 处理 job=%s 异常", idx, job_id)
             finally:
@@ -205,6 +243,9 @@ class InProcessAsyncQueue(JobQueue):
                 await session.commit()
                 return
 
+            task = asyncio.current_task()
+            if task is not None and job.type == JobType.STRUCTURED_INDEX:
+                self._running_jobs[job_id] = task
             try:
                 await handler(session, job, engine_manager=self._engine_manager, job_queue=self)
                 job.status = JobStatus.SUCCEEDED
@@ -222,6 +263,18 @@ class InProcessAsyncQueue(JobQueue):
                     job.finished_at = None
                     job.error = None
                     log.info("任务已暂停 job=%s progress=%.0f%%", job_id, job.progress * 100)
+            except asyncio.CancelledError:
+                # An app shutdown leaves RUNNING durable for startup recovery.
+                # A deletion persists its pause flag before interrupting an index.
+                await session.rollback()
+                current = await session.get(Job, job_id)
+                if current is not None and (
+                    job_id in self._cancel_requested or (current.payload or {}).get("pause_requested")
+                ):
+                    current.status = JobStatus.PAUSED
+                    current.finished_at = None
+                    await session.commit()
+                raise
             except Exception as e:  # noqa: BLE001
                 await session.rollback()
                 job = await session.get(Job, job_id)
@@ -245,4 +298,19 @@ class InProcessAsyncQueue(JobQueue):
                         job.error = msg
                         job.finished_at = _now()
                         log.warning("任务失败 job=%s（尝试 %d 次）：%s", job_id, attempts, msg)
+                        if job.type == JobType.DELETE_DOCUMENT:
+                            from sag_api.db.models import Document
+                            from sag_api.enums import DocumentStatus
+
+                            await session.execute(
+                                update(Document).where(
+                                    Document.id == job.payload["target_document_id"],
+                                    Document.status == DocumentStatus.DELETING,
+                                ).values(status=DocumentStatus.DELETE_FAILED, error=msg)
+                            )
+                await session.commit()
+                return
+            finally:
+                self._running_jobs.pop(job_id, None)
+                self._cancel_requested.discard(job_id)
             await session.commit()

@@ -33,6 +33,11 @@ export default function ChatPage() {
       setSessionId(runtime.forThread(routeThreadId, { activate: true }));
       return;
     }
+    if (new URLSearchParams(window.location.search).get("web") === "1") {
+      preferredDraftRef.current = null;
+      setSessionId(runtime.createDraft({ activate: true }));
+      return;
+    }
     const index = runtime.getIndexSnapshot();
     const next =
       preferredDraftRef.current ??

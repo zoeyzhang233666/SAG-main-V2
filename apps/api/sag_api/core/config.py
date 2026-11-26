@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     llm_provider: ModelProviderId = _DEFAULT_LLM_PROVIDER.id
     llm_base_url: str | None = _DEFAULT_LLM_PROVIDER.default_base_url
     llm_api_key: str | None = None
+    # 独立搜索凭证，不复用其他模型供应商的 API Key。
+    tavily_api_key: str | None = None
     llm_model: str = _DEFAULT_LLM_PROVIDER.default_model
     llm_temperature: float = _DEFAULT_LLM_PROVIDER.default_temperature
     llm_max_tokens: int = 2048

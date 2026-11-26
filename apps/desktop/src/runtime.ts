@@ -168,7 +168,8 @@ function startPythonRuntime(
   let failure: Error | undefined;
   child.once("error", (error) => {
     log.error("API process could not start", error);
-    failure = new Error(`内置后端无法启动 (${error.code ?? "spawn error"})`);
+    const code = "code" in error && typeof error.code === "string" ? error.code : "spawn error";
+    failure = new Error(`内置后端无法启动 (${code})`);
   });
   child.once("exit", (code, signal) => {
     failure = new Error(`内置后端提前退出 (exit code ${code ?? "unknown"}, signal ${signal ?? "none"})`);

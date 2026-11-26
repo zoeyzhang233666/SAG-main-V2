@@ -14,6 +14,10 @@ class JobQueue(ABC):
     async def enqueue(self, job_id: str) -> None:
         """把一个已持久化的 Job 投入队列等待执行。"""
 
+    def cancel_running(self, job_id: str) -> bool:
+        """合作式取消正在执行的任务；默认无进程内任务可取消。"""
+        return False
+
     async def start(self) -> None:  # noqa: B027 - 可选生命周期钩子
         """启动后台 worker（如有）。"""
 

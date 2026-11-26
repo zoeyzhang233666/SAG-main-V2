@@ -6,7 +6,12 @@ import { useTranslations } from "next-intl";
 import { api, ApiError } from "@/lib/api";
 import type { Doc, Source } from "@/lib/types";
 
-const PROCESSING_DOCUMENT_STATES = new Set(["pending", "loading", "extracting"]);
+const PROCESSING_DOCUMENT_STATES = new Set([
+  "pending",
+  "loading",
+  "extracting",
+  "deleting",
+]);
 
 /**
  * Shared source-detail controller for the normal page and the mini workspace.

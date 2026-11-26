@@ -5,7 +5,7 @@ import {
   spawn,
   type ChildProcessByStdio,
 } from "node:child_process";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 
 import { app, utilityProcess, type UtilityProcess } from "electron";
 import log from "electron-log/main";
@@ -118,7 +118,7 @@ function startNextRuntime(webRoot: string, port: number): StartedProcess {
 }
 
 function pipeChildLogs(
-  child: ChildProcessByStdio<null, Readable, Readable>,
+  child: ChildProcessByStdio<Writable | null, Readable, Readable>,
   name: string,
 ): void {
   child.stdout.on("data", (chunk) => log.info(`[${name}] ${String(chunk).trimEnd()}`));
@@ -158,13 +158,15 @@ function startPythonRuntime(
       SAG_DATA_DIR: "./.data/engine",
       SAG_UPLOAD_DIR: "./.data/uploads",
       SAG_SAG_VECTOR_PROVIDER: "lancedb",
+      SAG_DESKTOP_WATCH_STDIN: "1",
       SAG_DESKTOP_HOST: desktopConfig.apiHost,
       SAG_DESKTOP_PORT: String(apiPort),
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
   pipeChildLogs(child, "api");
+  child.stdin.on("error", (error) => log.warn("API lifeline closed", error));
   let failure: Error | undefined;
   child.once("error", (error) => {
     log.error("API process could not start", error);
@@ -177,7 +179,7 @@ function startPythonRuntime(
   return {
     startupError: () => failure,
     stop: () => {
-      child.kill();
+      child.stdin.end();
     },
   };
 }

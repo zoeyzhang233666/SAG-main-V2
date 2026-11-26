@@ -62,3 +62,4 @@ async def test_delete_cleanup_and_registration():
                 assert r.status_code == 403
             finally:
                 settings.allow_registration = True
+

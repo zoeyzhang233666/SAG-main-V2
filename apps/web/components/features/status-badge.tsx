@@ -8,7 +8,15 @@ import type { DocumentStatus } from "@/lib/types";
 const MAP: Record<
   DocumentStatus,
   {
-    labelKey: "pending" | "loading" | "extracting" | "paused" | "ready" | "failed";
+    labelKey:
+      | "pending"
+      | "loading"
+      | "extracting"
+      | "paused"
+      | "deleting"
+      | "delete_failed"
+      | "ready"
+      | "failed";
     variant: "outline" | "secondary" | "success" | "destructive";
     icon: typeof Check;
     spin?: boolean;
@@ -18,6 +26,8 @@ const MAP: Record<
   loading: { labelKey: "loading", variant: "secondary", icon: Loader2, spin: true },
   extracting: { labelKey: "extracting", variant: "secondary", icon: Loader2, spin: true },
   paused: { labelKey: "paused", variant: "outline", icon: Pause },
+  deleting: { labelKey: "deleting", variant: "secondary", icon: Loader2, spin: true },
+  delete_failed: { labelKey: "delete_failed", variant: "destructive", icon: XCircle },
   ready: { labelKey: "ready", variant: "success", icon: Check },
   failed: { labelKey: "failed", variant: "destructive", icon: XCircle },
 };

@@ -238,12 +238,26 @@ async def test_entity_read_path():
             invalid = await c.get(f"/api/v1/sources/{sid}/graph?event_limit=10001", headers=H)
             assert invalid.status_code == 422
 
-            # 删除文档必须同步清理统计与引擎中的块、事件及孤立实体。
+            # 删除文档改为异步任务：先快速入队，再等待清理完成。
+            import asyncio
+
             deleted = await c.delete(
                 f"/api/v1/sources/{sid}/documents/{document_id}",
                 headers=H,
             )
             assert deleted.status_code == 200
+            delete_job = deleted.json()
+            assert delete_job["type"] == "delete_document"
+            assert delete_job["status"] in {"queued", "running", "succeeded"}
+
+            for _ in range(100):
+                docs = (await c.get(f"/api/v1/sources/{sid}/documents", headers=H)).json()
+                if not any(item["id"] == document_id for item in docs):
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                raise AssertionError("document delete job did not finish")
+
             source_after_delete = (await c.get(f"/api/v1/sources/{sid}", headers=H)).json()
             assert source_after_delete["document_count"] == 0
             assert source_after_delete["chunk_count"] == 0
@@ -267,3 +281,4 @@ async def test_entity_read_path():
             assert empty_graph["entities"] == []
             assert empty_graph["relations"] == []
             assert empty_graph["truncated"] is False
+

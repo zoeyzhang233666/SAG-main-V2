@@ -267,3 +267,4 @@ async def test_entity_read_path():
             assert empty_graph["entities"] == []
             assert empty_graph["relations"] == []
             assert empty_graph["truncated"] is False
+

@@ -393,6 +393,10 @@ async def test_web_search_uses_302_endpoint_and_returns_traceable_sources(monkey
     monkeypatch.setattr(settings, "tavily_api_key", None)
     monkeypatch.setattr(settings, "llm_base_url", "https://api.302ai.cn/v1")
     monkeypatch.setattr(settings, "llm_api_key", "sk-private-test")
+    async def no_free_results(*_args):
+        return "", []
+
+    monkeypatch.setattr(builtin, "search_keyless", no_free_results)
     monkeypatch.setattr(builtin.httpx, "AsyncClient", lambda **_kwargs: Client())
 
     result = await WebSearchTool().invoke(
@@ -451,6 +455,10 @@ async def test_web_search_uses_independent_tavily_key_with_apihub(monkeypatch):
     monkeypatch.setattr(settings, "llm_base_url", "https://apihub.chem-cloud.cn/v1")
     monkeypatch.setattr(settings, "llm_api_key", "model-key")
     monkeypatch.setattr(settings, "tavily_api_key", "search-key")
+    async def no_free_results(*_args):
+        return "", []
+
+    monkeypatch.setattr(builtin, "search_keyless", no_free_results)
     monkeypatch.setattr(builtin.httpx, "AsyncClient", lambda **_kwargs: Client())
     assert WebSearchTool.configured()
     result = await WebSearchTool().invoke(
@@ -469,20 +477,29 @@ async def test_web_search_uses_independent_tavily_key_with_apihub(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_web_search_is_unavailable_without_302_configuration(monkeypatch):
+async def test_web_search_works_without_search_key(monkeypatch):
     from sag_api.core.config import settings
+    from sag_api.tools import builtin
 
     monkeypatch.setattr(settings, "tavily_api_key", None)
-    monkeypatch.setattr(settings, "llm_base_url", "https://api.openai.com/v1")
+    monkeypatch.setattr(settings, "llm_base_url", "https://apihub.chem-cloud.cn/v1")
     monkeypatch.setattr(settings, "llm_api_key", "sk-test")
 
-    assert WebSearchTool.configured() is False
+    async def free_results(query, limit):
+        assert query == "最新消息"
+        assert limit == 6
+        return "Bing", [{"url": "https://example.com/news", "title": "News", "content": "Evidence"}]
+
+    monkeypatch.setattr(builtin, "search_keyless", free_results)
+    assert WebSearchTool.configured()
     result = await WebSearchTool().invoke(
         {"query": "最新消息"},
         ToolContext(engine_manager=SimpleNamespace()),
     )
-    assert result.data["section_count"] == 0
-    assert "尚未配置" in result.content
+    assert result.data["section_count"] == 1
+    assert result.data["external_references"][0]["url"] == "https://example.com/news"
+    assert "Bing" in result.content
+    assert "sk-test" not in result.content
 
 
 @pytest.mark.asyncio
